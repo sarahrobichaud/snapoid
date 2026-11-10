@@ -62,7 +62,21 @@ pub fn load() -> Result<Registry> {
 }
 
 fn registry_url() -> String {
-    std::env::var("SNAPOID_REGISTRY_URL").unwrap_or_else(|_| DEFAULT_REGISTRY_URL.to_owned())
+    let url = std::env::var("SNAPOID_REGISTRY_URL")
+        .unwrap_or_else(|_| DEFAULT_REGISTRY_URL.to_owned());
+    // raw.githubusercontent.com serves through a CDN that keys on the
+    // full URL and caches for minutes; a one-minute-bucketed query
+    // parameter makes a freshly pushed registry visible quickly without
+    // fetching from origin on every request.
+    let separator = if url.contains('?') { '&' } else { '?' };
+    format!("{url}{separator}t={}", unix_now() / 60)
+}
+
+fn unix_now() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|since| since.as_secs())
+        .unwrap_or(0)
 }
 
 fn fetch(url: &str) -> Result<Vec<Entry>> {
