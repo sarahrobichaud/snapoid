@@ -14,6 +14,7 @@ mod parser;
 mod scanner;
 mod store;
 
+use anyhow::Context;
 use clap::{Parser, Subcommand};
 
 #[derive(Parser)]
@@ -44,23 +45,42 @@ enum Commands {
         /// Specific snapshot to restore (default: newest)
         time_updated: Option<u64>,
     },
-    /// Manage stored game instances (game files per version)
+    /// Manage stored game versions (game files per version)
+    Version {
+        #[command(subcommand)]
+        command: VersionCommand,
+    },
+    /// Manage game instances
     Instance {
         #[command(subcommand)]
         command: InstanceCommand,
     },
     /// Check the Steam Web API for upstream updates
     Check,
-    /// Detect the installed game version (briefly spawns the headless server)
-    Version,
     /// Show the resolved Steam and Project Zomboid paths
     Paths,
 }
 
 #[derive(Subcommand)]
-enum InstanceCommand {
-    /// Capture the current game files into instance/<version>/
+enum VersionCommand {
+    /// Detect the installed game version (briefly spawns the headless server)
+    Detect,
+    /// Capture the current game files into game/<version>/
     Snapshot,
+    /// List stored game versions
+    List,
+}
+
+#[derive(Subcommand)]
+enum InstanceCommand {
+    /// Create instance/<name> with a game folder linked to a stored version
+    New {
+        /// Instance name
+        name: String,
+        /// Game version to link (default: the currently installed version)
+        #[arg(short, long)]
+        version: Option<String>,
+    },
     /// List stored game instances
     List,
 }
@@ -143,23 +163,29 @@ fn main() -> anyhow::Result<()> {
             deploy::restore(&paths, &store, item_id, time_updated)?;
         }
         Commands::Instance { command } => match command {
-            InstanceCommand::Snapshot => {
-                let paths = scanner::steam::locate()?;
-                let Some(game_dir) = paths.game_dir.as_deref() else {
-                    anyhow::bail!("Project Zomboid install not found; nothing to snapshot");
-                };
-                let version = scanner::game_version::detect(&paths)?;
-                let Some(version_str) = version.version.as_deref() else {
-                    anyhow::bail!("could not detect the installed game version");
+            InstanceCommand::New { name, version } => {
+                let paths = scanner::steam::locate().ok();
+                let version = match version {
+                    Some(v) => v,
+                    None => {
+                        let paths = paths
+                            .as_ref()
+                            .context("Steam install not found; pass --version")?;
+                        let info = scanner::game_version::detect(paths)?;
+                        info.version.context(
+                            "could not detect the installed game version; pass --version",
+                        )?
+                    }
                 };
 
-                let store = store::Store::open(paths.game_dir.as_deref())?;
-                let instance = store.snapshot_game(game_dir, version_str, version.revision.as_deref())?;
-                println!("instance {} captured", instance.version);
-                if let Some(revision) = &instance.revision {
-                    println!("  revision: {revision}");
-                }
-                println!("  path:     {}", instance.dir.display());
+                let store = store::Store::open(paths.as_ref().and_then(|p| p.game_dir.as_deref()))?;
+                let instance = store.instance_new(&name, &version)?;
+                println!(
+                    "instance {} created (game version {})",
+                    instance.name, instance.version
+                );
+                println!("  path: {}", instance.dir.display());
+                println!("  game: {}", instance.game_dir.display());
             }
             InstanceCommand::List => {
                 // The store location depends on the game drive under WSL,
@@ -177,33 +203,82 @@ fn main() -> anyhow::Result<()> {
                     } else {
                         fmt::format_date_utc(instance.created)
                     };
+                    let game = if instance.game_dir.is_dir() {
+                        "ok"
+                    } else {
+                        "BROKEN LINK"
+                    };
                     println!(
-                        "{}  captured {}  {}",
-                        instance.version,
-                        captured,
-                        instance.dir.display()
+                        "{}  (version {})  captured {}  game link {}",
+                        instance.name, instance.version, captured, game
                     );
+                    println!("  {}", instance.dir.display());
                 }
             }
         },
         Commands::Check => {
             todo!("collect installed ids, query api::fetch_remote, diff against the store")
         }
-        Commands::Version => {
-            let paths = scanner::steam::locate()?;
-            let info = scanner::game_version::detect(&paths)?;
-            println!("version:  {}", info.version.as_deref().unwrap_or("unknown"));
-            println!(
-                "revision: {}",
-                info.revision.as_deref().unwrap_or("unknown")
-            );
-            println!(
-                "source:   {}",
-                info.source
-                    .map(|source| format!("{source:?}"))
-                    .unwrap_or_else(|| "none".to_owned())
-            );
-        }
+        Commands::Version { command } => match command {
+            VersionCommand::Detect => {
+                let paths = scanner::steam::locate()?;
+                let info = scanner::game_version::detect(&paths)?;
+                println!("version:  {}", info.version.as_deref().unwrap_or("unknown"));
+                println!(
+                    "revision: {}",
+                    info.revision.as_deref().unwrap_or("unknown")
+                );
+                println!(
+                    "source:   {}",
+                    info.source
+                        .map(|source| format!("{source:?}"))
+                        .unwrap_or_else(|| "none".to_owned())
+                );
+            }
+            VersionCommand::Snapshot => {
+                let paths = scanner::steam::locate()?;
+                let Some(game_dir) = paths.game_dir.as_deref() else {
+                    anyhow::bail!("Project Zomboid install not found; nothing to snapshot");
+                };
+                let version = scanner::game_version::detect(&paths)?;
+                let Some(version_str) = version.version.as_deref() else {
+                    anyhow::bail!("could not detect the installed game version");
+                };
+
+                let store = store::Store::open(paths.game_dir.as_deref())?;
+                let game =
+                    store.snapshot_version(game_dir, version_str, version.revision.as_deref())?;
+                println!("game version {} captured", game.version);
+                if let Some(revision) = &game.revision {
+                    println!("  revision: {revision}");
+                }
+                println!("  path:     {}", game.dir.display());
+            }
+            VersionCommand::List => {
+                // The store location depends on the game drive under WSL,
+                // but listing should still work without a Steam install.
+                let game_dir = scanner::steam::locate().ok().and_then(|p| p.game_dir);
+                let store = store::Store::open(game_dir.as_deref())?;
+                let games = store.list_games()?;
+                if games.is_empty() {
+                    println!("No game versions stored.");
+                    return Ok(());
+                }
+                for game in &games {
+                    let captured = if game.created == 0 {
+                        "unknown".to_string()
+                    } else {
+                        fmt::format_date_utc(game.created)
+                    };
+                    println!(
+                        "{}  captured {}  {}",
+                        game.version,
+                        captured,
+                        game.dir.display()
+                    );
+                }
+            }
+        },
         Commands::Paths => {
             let paths = scanner::steam::locate()?;
             println!("Steam root:       {}", paths.steam_dir.display());

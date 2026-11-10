@@ -4,20 +4,22 @@
 //! the game install; this store holds captured copies Steam will never
 //! touch.
 //!
-//! Game instances are the first-class entity: a full copy of the game
-//! files for one specific version, laid out as `<root>/instance/<version>/`
-//! with an `instance.json` metadata sidecar. Workshop item captures
-//! (`<root>/store/<pfid>/<timeupdated>/`) are scaffolded below but not
-//! implemented yet.
+//! Layout:
+//!   <root>/game/<version>/     stored game files, one copy per version,
+//!                              with a game.json metadata sidecar
+//!   <root>/instance/<name>/    a named instance whose game/ folder is a
+//!                              link into ../../game/<version>, with an
+//!                              instance.json sidecar
 //!
-//! Under WSL the store moves to the Windows side, on the same drive as
-//! the game install (`/mnt/<letter>/Users/<profile>/AppData/Roaming/snapoid`),
-//! so both Windows and WSL invocations share one store on a native
-//! filesystem instead of straddling the 9p boundary.
+//! Multiple instances can share one version. Under WSL the store moves to
+//! the Windows side, on the same drive as the game install
+//! (`/mnt/<letter>/Users/<profile>/AppData/Roaming/snapoid`), so both
+//! Windows and WSL invocations share one store on a native filesystem.
 
 use std::fs;
 use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result};
@@ -25,31 +27,46 @@ use serde::{Deserialize, Serialize};
 
 use crate::{debug, info, warn};
 
-/// Top-level entries of the game install that never belong to an instance:
-/// standalone mods, and home-folder data the game may have dropped into
-/// its working directory.
+/// Top-level entries of the game install that never belong to a stored
+/// version: standalone mods, and home-folder data the game may have
+/// dropped into its working directory.
 const EXCLUDED_TOP_LEVEL: &[&str] = &["mods", "Zomboid"];
 
 /// Entries of C:\Users that are not user profiles.
 const NON_PROFILE_USERS: &[&str] = &["public", "default", "default user", "all users"];
 
-/// Metadata sidecar written into every instance directory.
+/// Metadata sidecar (game.json / instance.json).
 #[derive(Debug, Serialize, Deserialize)]
-struct InstanceMeta {
+struct Meta {
     version: String,
     #[serde(default)]
     revision: Option<String>,
-    /// Unix seconds at capture time.
+    /// Unix seconds at creation time.
     created: u64,
 }
 
-/// A stored copy of the game files for one specific version.
+/// A stored copy of the game files for one version.
 #[derive(Debug)]
-pub struct GameInstance {
+pub struct StoredGame {
     pub version: String,
     pub revision: Option<String>,
     pub dir: PathBuf,
     /// Unix seconds at capture time; 0 when unknown.
+    pub created: u64,
+}
+
+/// A game instance: a named slot whose game folder links to a version.
+#[derive(Debug)]
+pub struct GameInstance {
+    /// Instance name; also the name of its folder.
+    pub name: String,
+    /// Game version the instance is linked to.
+    pub version: String,
+    pub revision: Option<String>,
+    pub dir: PathBuf,
+    /// The instance's linked game folder (instance/<name>/game).
+    pub game_dir: PathBuf,
+    /// Unix seconds at creation time; 0 when unknown.
     pub created: u64,
 }
 
@@ -75,11 +92,20 @@ impl Store {
                 .context("could not resolve the user data directory")?
                 .join("snapoid"),
         };
+        Self::create(root)
+    }
+
+    #[cfg(test)]
+    fn open_at(root: &Path) -> Result<Self> {
+        Self::create(root.to_path_buf())
+    }
+
+    fn create(root: PathBuf) -> Result<Self> {
         fs::create_dir_all(&root)
             .with_context(|| format!("creating store root {}", root.display()))?;
-        let instances = Self::instances_dir_in(&root);
-        fs::create_dir_all(&instances)
-            .with_context(|| format!("creating instance dir {}", instances.display()))?;
+        for dir in [Self::games_dir_in(&root), Self::instances_dir_in(&root)] {
+            fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
+        }
         info!("store at {}", root.display());
         Ok(Self { root })
     }
@@ -88,8 +114,17 @@ impl Store {
         &self.root
     }
 
+    fn games_dir_in(root: &Path) -> PathBuf {
+        root.join("game")
+    }
+
     fn instances_dir_in(root: &Path) -> PathBuf {
         root.join("instance")
+    }
+
+    /// Directory holding all stored game versions.
+    pub fn games_dir(&self) -> PathBuf {
+        Self::games_dir_in(&self.root)
     }
 
     /// Directory holding all game instances.
@@ -97,29 +132,31 @@ impl Store {
         Self::instances_dir_in(&self.root)
     }
 
-    /// Directory for one game instance: `instance/<version>/`.
-    pub fn instance_dir(&self, version: &str) -> PathBuf {
-        self.instances_dir().join(sanitize_version(version))
+    /// Directory of one stored game version: `game/<version>/`.
+    pub fn game_dir(&self, version: &str) -> PathBuf {
+        self.games_dir().join(sanitize_name(version))
     }
 
-    /// Copy the current game files into `instance/<version>/`.
+    /// Directory of one game instance: `instance/<name>/`.
+    pub fn instance_dir(&self, name: &str) -> PathBuf {
+        self.instances_dir().join(sanitize_name(name))
+    }
+
+    /// Copy the current game files into `game/<version>/`.
     ///
     /// Only the game install itself is captured: mods and home-folder data
     /// are excluded. Re-snapshotting an existing version replaces it
     /// atomically via a staging directory.
-    pub fn snapshot_game(
+    pub fn snapshot_version(
         &self,
         game_dir: &Path,
         version: &str,
         revision: Option<&str>,
-    ) -> Result<GameInstance> {
-        let created = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map(|d| d.as_secs())
-            .unwrap_or(0);
-        let safe = sanitize_version(version);
-        let dir = self.instances_dir().join(&safe);
-        let staging = self.instances_dir().join(format!(".staging-{safe}"));
+    ) -> Result<StoredGame> {
+        let created = unix_now();
+        let safe = sanitize_name(version);
+        let dir = self.games_dir().join(&safe);
+        let staging = self.games_dir().join(format!(".staging-{safe}"));
 
         if staging.exists() {
             fs::remove_dir_all(&staging)
@@ -143,21 +180,18 @@ impl Store {
             started.elapsed().as_secs_f32()
         );
 
-        let meta = InstanceMeta {
-            version: version.to_owned(),
-            revision: revision.map(str::to_owned),
-            created,
-        };
-        let meta_path = staging.join("instance.json");
-        serde_json::to_writer_pretty(
-            fs::File::create(&meta_path).context("writing instance.json")?,
-            &meta,
-        )
-        .context("writing instance.json")?;
+        write_meta(
+            &staging.join("game.json"),
+            &Meta {
+                version: version.to_owned(),
+                revision: revision.map(str::to_owned),
+                created,
+            },
+        )?;
 
         swap_into_place(&staging, &dir)?;
 
-        Ok(GameInstance {
+        Ok(StoredGame {
             version: version.to_owned(),
             revision: revision.map(str::to_owned),
             dir,
@@ -165,7 +199,92 @@ impl Store {
         })
     }
 
-    /// List stored game instances, sorted by version.
+    /// List stored game versions, sorted by version.
+    pub fn list_games(&self) -> Result<Vec<StoredGame>> {
+        let dir = self.games_dir();
+        if !dir.is_dir() {
+            return Ok(Vec::new());
+        }
+
+        let mut games = Vec::new();
+        for entry in fs::read_dir(&dir).with_context(|| format!("reading {}", dir.display()))? {
+            let entry = entry.with_context(|| format!("reading {}", dir.display()))?;
+            let path = entry.path();
+            if !path.is_dir() || path.file_name().is_some_and(|n| n.to_string_lossy().starts_with('.'))
+            {
+                continue;
+            }
+            let meta = read_meta(&path.join("game.json")).ok().flatten();
+            games.push(StoredGame {
+                version: meta
+                    .as_ref()
+                    .map(|m| m.version.clone())
+                    .unwrap_or_else(|| entry.file_name().to_string_lossy().into_owned()),
+                revision: meta.as_ref().and_then(|m| m.revision.clone()),
+                dir: path,
+                created: meta.as_ref().map(|m| m.created).unwrap_or(0),
+            });
+        }
+
+        games.sort_by(|a, b| a.version.cmp(&b.version));
+        Ok(games)
+    }
+
+    /// Create `instance/<name>` whose game folder links to
+    /// `game/<version>`.
+    pub fn instance_new(&self, name: &str, version: &str) -> Result<GameInstance> {
+        let game = self.game_dir(version);
+        if !game.is_dir() {
+            anyhow::bail!("game version {version} is not stored; run `snapoid version snapshot` first");
+        }
+        let revision = read_meta(&game.join("game.json"))
+            .ok()
+            .flatten()
+            .and_then(|m| m.revision);
+
+        let dir = self.instance_dir(name);
+        if dir.exists() {
+            if dir.join("instance.json").is_file() {
+                anyhow::bail!("instance {name} already exists at {}", dir.display());
+            }
+            // No metadata: a leftover from a failed creation. snapoid owns
+            // this folder, so clear it and start fresh.
+            warn!("removing leftover instance dir {}", dir.display());
+            fs::remove_dir_all(&dir)
+                .with_context(|| format!("clearing {}", dir.display()))?;
+        }
+        fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
+
+        let link = dir.join("game");
+        if let Err(error) =
+            create_link(&link, &PathBuf::from("../../game").join(sanitize_name(version)))
+        {
+            // Don't leave a half-created instance behind.
+            let _ = fs::remove_dir_all(&dir);
+            return Err(error).with_context(|| format!("linking instance {name} to version {version}"));
+        }
+
+        let created = unix_now();
+        write_meta(
+            &dir.join("instance.json"),
+            &Meta {
+                version: version.to_owned(),
+                revision: revision.clone(),
+                created,
+            },
+        )?;
+
+        Ok(GameInstance {
+            name: name.to_owned(),
+            version: version.to_owned(),
+            revision,
+            dir,
+            game_dir: link,
+            created,
+        })
+    }
+
+    /// List stored game instances, sorted by name.
     pub fn list_instances(&self) -> Result<Vec<GameInstance>> {
         let dir = self.instances_dir();
         if !dir.is_dir() {
@@ -183,21 +302,21 @@ impl Store {
             {
                 continue;
             }
-            let meta = fs::read_to_string(path.join("instance.json"))
-                .ok()
-                .and_then(|text| serde_json::from_str::<InstanceMeta>(&text).ok());
+            let meta = read_meta(&path.join("instance.json")).ok().flatten();
             instances.push(GameInstance {
+                name: entry.file_name().to_string_lossy().into_owned(),
                 version: meta
                     .as_ref()
                     .map(|m| m.version.clone())
-                    .unwrap_or_else(|| entry.file_name().to_string_lossy().into_owned()),
+                    .unwrap_or_else(|| "unknown".to_owned()),
                 revision: meta.as_ref().and_then(|m| m.revision.clone()),
+                game_dir: path.join("game"),
                 dir: path,
                 created: meta.as_ref().map(|m| m.created).unwrap_or(0),
             });
         }
 
-        instances.sort_by(|a, b| a.version.cmp(&b.version));
+        instances.sort_by(|a, b| a.name.cmp(&b.name));
         Ok(instances)
     }
 
@@ -300,6 +419,95 @@ fn windows_profile_on(drive: &Path) -> Option<PathBuf> {
         .find(|profile| profile.join("Zomboid").is_dir())
         .or_else(|| candidates.first())
         .cloned()
+}
+
+/// Create a directory link at `link` pointing at `target` (a path
+/// relative to the link's directory).
+///
+/// Under WSL with the link on a Windows drive, the link is created as a
+/// junction through cmd.exe interop: junctions need no privileges and are
+/// followed by Windows processes (the game). Native Linux uses a
+/// relative symlink; native Windows uses mklink /J, which needs an
+/// absolute backslash target (its parser reads `/..` as a switch).
+fn create_link(link: &Path, target: &Path) -> Result<()> {
+    #[cfg(unix)]
+    {
+        if is_wsl() && wsl_drive_root(link).is_some() {
+            let absolute = link.parent().map(|base| base.join(target));
+            let absolute = normalize_path(&absolute.unwrap_or_else(|| target.to_path_buf()));
+            if junction_via_interop(link, &absolute)? {
+                return Ok(());
+            }
+        }
+        std::os::unix::fs::symlink(target, link)
+            .with_context(|| format!("linking {} -> {}", link.display(), target.display()))?;
+        Ok(())
+    }
+    #[cfg(windows)]
+    {
+        let absolute = link.parent().map(|base| base.join(target));
+        let absolute = normalize_path(&absolute.unwrap_or_else(|| target.to_path_buf()));
+        let absolute = absolute.to_string_lossy().replace('/', "\\");
+        let status = Command::new("cmd")
+            .args(["/c", "mklink", "/J"])
+            .arg(link)
+            .arg(&absolute)
+            .status()
+            .context("running mklink")?;
+        if !status.success() {
+            anyhow::bail!("mklink /J {} {} failed", link.display(), absolute);
+        }
+        Ok(())
+    }
+}
+
+/// Resolve `..` components lexically, without touching the filesystem.
+fn normalize_path(path: &Path) -> PathBuf {
+    let mut out = PathBuf::new();
+    for component in path.components() {
+        match component {
+            std::path::Component::ParentDir => {
+                out.pop();
+            }
+            std::path::Component::CurDir => {}
+            component => out.push(component.as_os_str()),
+        }
+    }
+    out
+}
+
+/// Try to create a junction through WSL↔Windows interop, converting both
+/// paths to their Windows form with wslpath. Returns Ok(false) when
+/// interop is unavailable (no wslpath or cmd.exe).
+#[cfg(unix)]
+fn junction_via_interop(link: &Path, target: &Path) -> Result<bool> {
+    let (Some(win_link), Some(win_target)) = (wslpath(link), wslpath(target)) else {
+        return Ok(false);
+    };
+    match Command::new("cmd.exe")
+        .args(["/c", "mklink", "/J"])
+        .arg(&win_link)
+        .arg(&win_target)
+        .status()
+    {
+        Ok(status) if status.success() => {
+            debug!("junction {win_link} -> {win_target}");
+            Ok(true)
+        }
+        Ok(status) => anyhow::bail!("mklink /J failed ({status})"),
+        Err(_) => Ok(false),
+    }
+}
+
+/// Convert a path to its Windows form via wslpath; None when unavailable.
+#[cfg(unix)]
+fn wslpath(path: &Path) -> Option<String> {
+    let output = Command::new("wslpath").arg("-w").arg(path).output().ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let text = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+    (!text.is_empty()).then_some(text)
 }
 
 /// Replace `dir` with `staging`, keeping the old copy until the swap
@@ -486,9 +694,9 @@ fn copy_tree(src: &Path, dst: &Path, top_level: bool, progress: &mut CopyProgres
     Ok(files)
 }
 
-/// Reduce a version string to safe path characters.
-fn sanitize_version(version: &str) -> String {
-    let safe: String = version
+/// Reduce an instance name to safe path characters.
+fn sanitize_name(name: &str) -> String {
+    let safe: String = name
         .chars()
         .map(|c| {
             if c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_') {
@@ -505,6 +713,32 @@ fn sanitize_version(version: &str) -> String {
     }
 }
 
+/// Read a metadata sidecar; None when it does not exist.
+fn read_meta(path: &Path) -> Result<Option<Meta>> {
+    match fs::read_to_string(path) {
+        Ok(text) => Ok(Some(
+            serde_json::from_str(&text).with_context(|| format!("parsing {}", path.display()))?,
+        )),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(error).with_context(|| format!("reading {}", path.display())),
+    }
+}
+
+fn write_meta(path: &Path, meta: &Meta) -> Result<()> {
+    serde_json::to_writer_pretty(
+        fs::File::create(path).with_context(|| format!("writing {}", path.display()))?,
+        meta,
+    )
+    .with_context(|| format!("writing {}", path.display()))
+}
+
+fn unix_now() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -515,7 +749,10 @@ mod tests {
             wsl_drive_root(Path::new("/mnt/c/Program Files (x86)/Steam/game")),
             Some(PathBuf::from("/mnt/c"))
         );
-        assert_eq!(wsl_drive_root(Path::new("/mnt/d")), Some(PathBuf::from("/mnt/d")));
+        assert_eq!(
+            wsl_drive_root(Path::new("/mnt/d")),
+            Some(PathBuf::from("/mnt/d"))
+        );
         // Linux-side installs keep the store on the Linux side.
         assert_eq!(wsl_drive_root(Path::new("/home/user/.steam/game")), None);
         // Non-drive automounts are not drives.
@@ -545,10 +782,10 @@ mod tests {
     }
 
     #[test]
-    fn sanitizes_version_strings() {
-        assert_eq!(sanitize_version("42.22.2"), "42.22.2");
-        assert_eq!(sanitize_version("42.10 beta"), "42.10_beta");
-        assert_eq!(sanitize_version(""), "unknown");
+    fn sanitizes_instance_names() {
+        assert_eq!(sanitize_name("42.22.2"), "42.22.2");
+        assert_eq!(sanitize_name("42.10 beta"), "42.10_beta");
+        assert_eq!(sanitize_name(""), "unknown");
     }
 
     #[test]
@@ -580,6 +817,29 @@ mod tests {
 
         // Measurement mirrors the copy exclusions (3+3+3 bytes).
         assert_eq!(measure_tree(&src, true)?, (3, 9));
+
+        fs::remove_dir_all(&base)?;
+        Ok(())
+    }
+
+    #[test]
+    fn creates_instance_linked_to_version() -> Result<()> {
+        let base = std::env::temp_dir().join(format!("snapoid-inst-{}", std::process::id()));
+        let store = Store::open_at(&base)?;
+
+        let game = store.game_dir("42.22.2");
+        fs::create_dir_all(&game)?;
+        fs::write(game.join("projectzomboid.jar"), "jar")?;
+
+        let instance = store.instance_new("survivor", "42.22.2")?;
+        assert_eq!(instance.version, "42.22.2");
+        assert!(instance.game_dir.is_dir(), "game link should resolve");
+        assert!(instance.game_dir.join("projectzomboid.jar").is_file());
+        assert!(instance.dir.join("instance.json").is_file());
+
+        // Unknown versions and duplicate names are rejected.
+        assert!(store.instance_new("bad", "0.0").is_err());
+        assert!(store.instance_new("survivor", "42.22.2").is_err());
 
         fs::remove_dir_all(&base)?;
         Ok(())
