@@ -12,6 +12,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 
 use crate::parser::acf::{self, Acf};
+use crate::warn;
 use super::steam::{self, SteamPaths};
 
 #[derive(Debug)]
@@ -67,8 +68,8 @@ pub fn scan(paths: &SteamPaths) -> Result<Vec<WorkshopItem>> {
             }
         }
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            eprintln!(
-                "warning: {} not found; listing disk contents only",
+            warn!(
+                "{} not found; listing disk contents only",
                 acf_path.display()
             );
         }

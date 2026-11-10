@@ -9,6 +9,7 @@
 mod api;
 mod deploy;
 mod fmt;
+mod logger;
 mod parser;
 mod scanner;
 mod store;
@@ -53,6 +54,7 @@ enum Commands {
 
 fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
+    logger::init(logger::Level::Info);
 
     match cli.command {
         Commands::Scan => {
@@ -62,6 +64,8 @@ fn main() -> anyhow::Result<()> {
                 println!("No workshop items installed for Project Zomboid.");
                 return Ok(());
             }
+
+            info!("found {} workshop item(s)", items.len());
 
             let mut total_mods = 0;
             for item in &items {

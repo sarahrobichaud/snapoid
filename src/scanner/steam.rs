@@ -9,6 +9,7 @@ use std::process::Command;
 use anyhow::{Context, Result};
 
 use crate::parser::acf::{self, Acf};
+use crate::warn;
 
 /// Project Zomboid's Steam app ID.
 pub const PZ_APP_ID: u32 = 108600;
@@ -139,7 +140,7 @@ fn find_libraries(steam_dir: &Path) -> Result<Vec<PathBuf>> {
                 }
             }
             Err(error) => {
-                eprintln!("warning: could not parse {}: {error}", vdf.display());
+                warn!("could not parse {}: {error}", vdf.display());
             }
         }
     }
