@@ -1,3 +1,4 @@
+mod mods;
 mod paths;
 
 use clap::{Parser, Subcommand};
@@ -13,6 +14,12 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
+    /// List workshop mods and their version builds
+    Mods {
+        /// Override the detected workshop mods directory
+        #[arg(long)]
+        workshop: Option<PathBuf>,
+    },
     /// Detect Project Zomboid game and mod paths
     Paths {
         /// Override the detected game install directory
@@ -31,6 +38,9 @@ fn main() {
     let cli = Cli::parse();
 
     match cli.command {
+        Commands::Mods { workshop } => {
+            mods::run(workshop);
+        }
         Commands::Paths {
             game,
             workshop,

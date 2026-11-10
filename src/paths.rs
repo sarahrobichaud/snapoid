@@ -169,27 +169,46 @@ fn detect_userdata() -> Option<PathBuf> {
     None
 }
 
+#[derive(Debug, Default)]
+pub struct ResolvedPaths {
+    pub steam_roots: Vec<PathBuf>,
+    pub game: Option<PathBuf>,
+    pub workshop: Option<PathBuf>,
+    pub userdata: Option<PathBuf>,
+}
+
+/// Detect paths, applying any explicit overrides.
+pub fn resolve(
+    game_override: Option<PathBuf>,
+    workshop_override: Option<PathBuf>,
+    userdata_override: Option<PathBuf>,
+) -> ResolvedPaths {
+    let detected = detect();
+    ResolvedPaths {
+        steam_roots: detected.steam_roots,
+        game: game_override.or(detected.game),
+        workshop: workshop_override.or(detected.workshop),
+        userdata: userdata_override.or(detected.userdata),
+    }
+}
+
 pub fn run(
     game_override: Option<PathBuf>,
     workshop_override: Option<PathBuf>,
     userdata_override: Option<PathBuf>,
 ) {
-    let detected = detect();
-
-    let game = game_override.or(detected.game);
-    let workshop = workshop_override.or(detected.workshop);
-    let userdata = userdata_override.or(detected.userdata);
+    let resolved = resolve(game_override, workshop_override, userdata_override);
 
     println!("Project Zomboid paths:");
     println!();
-    print_path("Game install", game.as_deref());
-    print_path("Workshop mods", workshop.as_deref());
-    print_path("User data", userdata.as_deref());
+    print_path("Game install", resolved.game.as_deref());
+    print_path("Workshop mods", resolved.workshop.as_deref());
+    print_path("User data", resolved.userdata.as_deref());
 
-    if (game.is_none() || workshop.is_none()) && !detected.steam_roots.is_empty() {
+    if (resolved.game.is_none() || resolved.workshop.is_none()) && !resolved.steam_roots.is_empty() {
         println!();
         println!("Steam libraries searched:");
-        for root in &detected.steam_roots {
+        for root in &resolved.steam_roots {
             println!("  {}", root.display());
         }
         println!();
@@ -201,7 +220,7 @@ fn print_path(label: &str, path: Option<&Path>) {
     match path {
         Some(p) => {
             let status = if p.is_dir() { "found" } else { "missing" };
-            println!("{:<14} [{}] {}", label, status, p.display();
+            println!("{:<14} [{}] {}", label, status, p.display());
         }
         None => {
             println!("{:<14} [not found]", label);
