@@ -15,6 +15,12 @@
 //! the Windows side, on the same drive as the game install
 //! (`/mnt/<letter>/Users/<profile>/AppData/Roaming/snapoid`), so both
 //! Windows and WSL invocations share one store on a native filesystem.
+//!
+//! Submodules:
+//! - [`download`] fetches game builds straight into the store's `game/`
+//!   dirs, so the multi-gigabyte files never get copied twice.
+
+pub mod download;
 
 use std::fs;
 use std::io::IsTerminal;

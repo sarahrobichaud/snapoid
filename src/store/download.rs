@@ -1,4 +1,4 @@
-//! Component 10: Game version downloader.
+//! Component 10: Game version downloader, part of the snapshot store.
 //!
 //! Downloads game builds straight into the store's `game/<version>/`
 //! dirs, so the multi-gigabyte files never get copied twice. Two paths:
@@ -19,11 +19,12 @@ use anyhow::Result;
 
 use crate::parser::acf::{self, Acf};
 use crate::registry;
+use crate::remote;
 use crate::scanner::game_version;
 use crate::scanner::steam::PZ_APP_ID;
 use crate::steamcmd;
-use crate::store::Store;
 use crate::{debug, info, warn};
+use super::Store;
 
 /// Project Zomboid's Windows depot, the game files snapoid snapshots.
 /// Used when neither the CLI nor the registry entry specifies a depot.
@@ -67,7 +68,7 @@ fn download_latest(
     login: Option<&str>,
     force: bool,
 ) -> Result<Downloaded> {
-    let current = match steamcmd::current_buildid(program, PZ_APP_ID) {
+    let current = match remote::current_buildid(program, PZ_APP_ID) {
         Ok(buildid) => Some(buildid),
         Err(error) => {
             warn!("could not query the current buildid ({error:#}); downloading anyway");
@@ -166,7 +167,7 @@ fn appmanifest_buildid(steamapps_dir: &Path) -> Option<u64> {
 /// when the live install is at the current build, a stored version with
 /// the same version string is the same build. On a match, the stored
 /// version's buildid (and a missing revision) are backfilled.
-fn live_install_match(store: &Store, buildid: u64) -> Result<Option<crate::store::StoredGame>> {
+fn live_install_match(store: &Store, buildid: u64) -> Result<Option<super::StoredGame>> {
     let Ok(paths) = crate::scanner::steam::locate() else {
         return Ok(None);
     };
@@ -311,8 +312,8 @@ fn require_login(login: Option<&str>) -> Result<&str> {
 
 fn path_arg(path: &Path) -> Result<String> {
     #[cfg(unix)]
-    if crate::store::is_wsl() {
-        return crate::store::wslpath(path)
+    if super::is_wsl() {
+        return super::wslpath(path)
             .with_context(|| format!("converting {} to a Windows path", path.display()));
     }
     Ok(path.display().to_string())

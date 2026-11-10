@@ -8,11 +8,11 @@
 
 mod api;
 mod deploy;
-mod download;
 mod fmt;
 mod logger;
 mod parser;
 mod registry;
+mod remote;
 mod scanner;
 mod steamcmd;
 mod store;
@@ -37,17 +37,6 @@ struct Cli {
 enum Commands {
     /// List installed workshop items and the mods they contain
     Scan,
-    /// Capture the current state of workshop items into the local store
-    Snapshot {
-        /// Snapshot only this workshop item (default: all installed)
-        item_id: Option<u64>,
-    },
-    /// Restore a stored snapshot into the workshop folder
-    Restore {
-        item_id: u64,
-        /// Specific snapshot to restore (default: newest)
-        time_updated: Option<u64>,
-    },
     /// Manage stored game versions (game files per version)
     Version {
         #[command(subcommand)]
@@ -58,8 +47,6 @@ enum Commands {
         #[command(subcommand)]
         command: InstanceCommand,
     },
-    /// Check the Steam Web API for upstream updates
-    Check,
     /// Show the resolved Steam and Project Zomboid paths
     Paths,
     /// Run steamcmd with the given arguments
@@ -177,24 +164,6 @@ fn main() -> anyhow::Result<()> {
                 if total_mods == 1 { "" } else { "s" }
             );
         }
-        Commands::Snapshot { item_id } => {
-            let paths = scanner::steam::locate()?;
-            let store = store::Store::open(paths.game_dir.as_deref())?;
-            match item_id {
-                Some(id) => {
-                    store.snapshot(id)?;
-                }
-                None => todo!("snapshot every installed item"),
-            }
-        }
-        Commands::Restore {
-            item_id,
-            time_updated,
-        } => {
-            let paths = scanner::steam::locate()?;
-            let store = store::Store::open(paths.game_dir.as_deref())?;
-            deploy::restore(&paths, &store, item_id, time_updated)?;
-        }
         Commands::Instance { command } => match command {
             InstanceCommand::New { name, version } => {
                 let paths = scanner::steam::locate().ok();
@@ -249,9 +218,6 @@ fn main() -> anyhow::Result<()> {
                 }
             }
         },
-        Commands::Check => {
-            todo!("collect installed ids, query api::fetch_remote, diff against the store")
-        }
         Commands::Version { command } => match command {
             VersionCommand::Detect => {
                 let paths = scanner::steam::locate()?;
@@ -314,7 +280,7 @@ fn main() -> anyhow::Result<()> {
                 let program = steamcmd::locate()?;
                 let game_dir = scanner::steam::locate().ok().and_then(|p| p.game_dir);
                 let store = store::Store::open(game_dir.as_deref())?;
-                let downloaded = download::download(
+                let downloaded = store::download::download(
                     &store,
                     &program,
                     &version,
