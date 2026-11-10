@@ -8,6 +8,21 @@ pub fn format_date_utc(epoch_seconds: u64) -> String {
     format!("{year:04}-{month:02}-{day:02}")
 }
 
+/// Format a byte count for display, e.g. "512 B", "1.2 GiB".
+pub fn format_bytes(bytes: u64) -> String {
+    const UNITS: [&str; 5] = ["B", "KiB", "MiB", "GiB", "TiB"];
+    if bytes < 1024 {
+        return format!("{bytes} B");
+    }
+    let mut value = bytes as f64;
+    let mut unit = 0;
+    while value >= 1024.0 && unit < UNITS.len() - 1 {
+        value /= 1024.0;
+        unit += 1;
+    }
+    format!("{value:.1} {}", UNITS[unit])
+}
+
 /// Convert days since 1970-01-01 to a (year, month, day) proleptic
 /// Gregorian date.
 fn civil_from_days(days: i64) -> (i64, u32, u32) {
@@ -28,6 +43,15 @@ fn civil_from_days(days: i64) -> (i64, u32, u32) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn formats_byte_counts() {
+        assert_eq!(format_bytes(0), "0 B");
+        assert_eq!(format_bytes(1023), "1023 B");
+        assert_eq!(format_bytes(1024), "1.0 KiB");
+        assert_eq!(format_bytes(5 * 1024 * 1024), "5.0 MiB");
+        assert_eq!(format_bytes(3 * 1024u64.pow(3)), "3.0 GiB");
+    }
 
     #[test]
     fn formats_known_dates() {

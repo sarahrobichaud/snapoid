@@ -44,12 +44,25 @@ enum Commands {
         /// Specific snapshot to restore (default: newest)
         time_updated: Option<u64>,
     },
+    /// Manage stored game instances (game files per version)
+    Instance {
+        #[command(subcommand)]
+        command: InstanceCommand,
+    },
     /// Check the Steam Web API for upstream updates
     Check,
     /// Detect the installed game version (briefly spawns the headless server)
     Version,
     /// Show the resolved Steam and Project Zomboid paths
     Paths,
+}
+
+#[derive(Subcommand)]
+enum InstanceCommand {
+    /// Capture the current game files into instance/<version>/
+    Snapshot,
+    /// List stored game instances
+    List,
 }
 
 fn main() -> anyhow::Result<()> {
@@ -112,7 +125,8 @@ fn main() -> anyhow::Result<()> {
             );
         }
         Commands::Snapshot { item_id } => {
-            let store = store::Store::open()?;
+            let paths = scanner::steam::locate()?;
+            let store = store::Store::open(paths.game_dir.as_deref())?;
             match item_id {
                 Some(id) => {
                     store.snapshot(id)?;
@@ -125,9 +139,53 @@ fn main() -> anyhow::Result<()> {
             time_updated,
         } => {
             let paths = scanner::steam::locate()?;
-            let store = store::Store::open()?;
+            let store = store::Store::open(paths.game_dir.as_deref())?;
             deploy::restore(&paths, &store, item_id, time_updated)?;
         }
+        Commands::Instance { command } => match command {
+            InstanceCommand::Snapshot => {
+                let paths = scanner::steam::locate()?;
+                let Some(game_dir) = paths.game_dir.as_deref() else {
+                    anyhow::bail!("Project Zomboid install not found; nothing to snapshot");
+                };
+                let version = scanner::game_version::detect(&paths)?;
+                let Some(version_str) = version.version.as_deref() else {
+                    anyhow::bail!("could not detect the installed game version");
+                };
+
+                let store = store::Store::open(paths.game_dir.as_deref())?;
+                let instance = store.snapshot_game(game_dir, version_str, version.revision.as_deref())?;
+                println!("instance {} captured", instance.version);
+                if let Some(revision) = &instance.revision {
+                    println!("  revision: {revision}");
+                }
+                println!("  path:     {}", instance.dir.display());
+            }
+            InstanceCommand::List => {
+                // The store location depends on the game drive under WSL,
+                // but listing should still work without a Steam install.
+                let game_dir = scanner::steam::locate().ok().and_then(|p| p.game_dir);
+                let store = store::Store::open(game_dir.as_deref())?;
+                let instances = store.list_instances()?;
+                if instances.is_empty() {
+                    println!("No game instances stored.");
+                    return Ok(());
+                }
+                for instance in &instances {
+                    let captured = if instance.created == 0 {
+                        "unknown".to_string()
+                    } else {
+                        fmt::format_date_utc(instance.created)
+                    };
+                    println!(
+                        "{}  captured {}  {}",
+                        instance.version,
+                        captured,
+                        instance.dir.display()
+                    );
+                }
+            }
+        },
         Commands::Check => {
             todo!("collect installed ids, query api::fetch_remote, diff against the store")
         }
