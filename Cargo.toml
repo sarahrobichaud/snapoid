@@ -5,3 +5,6 @@ edition = "2024"
 
 [dependencies]
 clap = { version = "4", features = ["derive"] }
+
+[target.'cfg(windows)'.dependencies]
+winreg = "0.55"

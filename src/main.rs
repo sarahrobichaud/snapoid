@@ -1,8 +1,11 @@
+mod paths;
+
 use clap::{Parser, Subcommand};
+use std::path::PathBuf;
 
 #[derive(Parser)]
 #[command(name = "snapoid")]
-#[command(version, about = "A CLI tool", long_about = None)]
+#[command(version, about = "Version manager for Project Zomboid", long_about = None)]
 struct Cli {
     #[command(subcommand)]
     command: Commands,
@@ -10,11 +13,17 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Greet someone by name
-    Greet {
-        /// Name of the person to greet
-        #[arg(default_value = "world")]
-        name: String,
+    /// Detect Project Zomboid game and mod paths
+    Paths {
+        /// Override the detected game install directory
+        #[arg(long)]
+        game: Option<PathBuf>,
+        /// Override the detected workshop mods directory
+        #[arg(long)]
+        workshop: Option<PathBuf>,
+        /// Override the detected user data directory
+        #[arg(long)]
+        userdata: Option<PathBuf>,
     },
 }
 
@@ -22,8 +31,12 @@ fn main() {
     let cli = Cli::parse();
 
     match cli.command {
-        Commands::Greet { name } => {
-            println!("Hello, {name}!");
+        Commands::Paths {
+            game,
+            workshop,
+            userdata,
+        } => {
+            paths::run(game, workshop, userdata);
         }
     }
 }
