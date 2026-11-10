@@ -11,7 +11,9 @@ mod deploy;
 mod fmt;
 mod logger;
 mod parser;
+mod registry;
 mod scanner;
+mod steamcmd;
 mod store;
 
 use anyhow::Context;
@@ -59,16 +61,35 @@ enum Commands {
     Check,
     /// Show the resolved Steam and Project Zomboid paths
     Paths,
+    /// Run steamcmd with the given arguments
+    Steamcmd {
+        /// Arguments passed to steamcmd, e.g. `+app_info_print 380870 +quit`.
+        /// With no arguments, just show the located steamcmd binary.
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<String>,
+    },
 }
 
 #[derive(Subcommand)]
 enum VersionCommand {
     /// Detect the installed game version (briefly spawns the headless server)
     Detect,
+    /// Detect the game version in an arbitrary directory (briefly spawns
+    /// the headless server found there)
+    Probe {
+        /// Directory containing the game files (e.g. a downloaded build)
+        game_dir: std::path::PathBuf,
+    },
     /// Capture the current game files into game/<version>/
     Snapshot,
     /// List stored game versions
     List,
+    /// Show the version → manifest registry
+    Registry {
+        /// Refetch from GitHub before showing
+        #[arg(long)]
+        refresh: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -223,17 +244,11 @@ fn main() -> anyhow::Result<()> {
             VersionCommand::Detect => {
                 let paths = scanner::steam::locate()?;
                 let info = scanner::game_version::detect(&paths)?;
-                println!("version:  {}", info.version.as_deref().unwrap_or("unknown"));
-                println!(
-                    "revision: {}",
-                    info.revision.as_deref().unwrap_or("unknown")
-                );
-                println!(
-                    "source:   {}",
-                    info.source
-                        .map(|source| format!("{source:?}"))
-                        .unwrap_or_else(|| "none".to_owned())
-                );
+                print_version_info(&info);
+            }
+            VersionCommand::Probe { game_dir } => {
+                let info = scanner::game_version::detect_dir(&game_dir)?;
+                print_version_info(&info);
             }
             VersionCommand::Snapshot => {
                 let paths = scanner::steam::locate()?;
@@ -278,6 +293,26 @@ fn main() -> anyhow::Result<()> {
                     );
                 }
             }
+            VersionCommand::Registry { refresh } => {
+                let registry = if refresh {
+                    registry::refresh()?
+                } else {
+                    registry::load()?
+                };
+                let source = match registry.source {
+                    registry::Source::Remote => "remote",
+                    registry::Source::Cache => "cache",
+                };
+                println!(
+                    "source: {} ({} build{})",
+                    source,
+                    registry.entries.len(),
+                    if registry.entries.len() == 1 { "" } else { "s" }
+                );
+                for entry in &registry.entries {
+                    println!("{}  {}", entry.version, entry.manifest);
+                }
+            }
         },
         Commands::Paths => {
             let paths = scanner::steam::locate()?;
@@ -301,6 +336,18 @@ fn main() -> anyhow::Result<()> {
                 "Zomboid user dir: {}",
                 optional_path(paths.zomboid_user_dir.as_deref())
             );
+            println!(
+                "SteamCMD:         {}",
+                optional_path(steamcmd::locate().ok().as_deref())
+            );
+        }
+        Commands::Steamcmd { args } => {
+            let program = steamcmd::locate()?;
+            if args.is_empty() {
+                println!("steamcmd: {}", program.display());
+                return Ok(());
+            }
+            steamcmd::run(&program, &args)?;
         }
     }
 
@@ -311,6 +358,24 @@ fn main() -> anyhow::Result<()> {
 fn optional_path(path: Option<&std::path::Path>) -> String {
     path.map(|p| p.display().to_string())
         .unwrap_or_else(|| "(not found)".to_string())
+}
+
+/// Print detected game version info for the detect/probe commands.
+fn print_version_info(info: &scanner::game_version::GameVersionInfo) {
+    println!(
+        "version:  {}",
+        info.version.as_deref().unwrap_or("unknown")
+    );
+    println!(
+        "revision: {}",
+        info.revision.as_deref().unwrap_or("unknown")
+    );
+    println!(
+        "source:   {}",
+        info.source
+            .map(|source| format!("{source:?}"))
+            .unwrap_or_else(|| "none".to_owned())
+    );
 }
 
 /// Format detected game version info for display.

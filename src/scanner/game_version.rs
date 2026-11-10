@@ -39,11 +39,27 @@ pub struct GameVersionInfo {
 /// server, which prints its full version (including the hotfix digit)
 /// during startup.
 pub fn detect(paths: &SteamPaths) -> Result<GameVersionInfo> {
+    match paths.game_dir.as_deref() {
+        Some(game_dir) => detect_dir(game_dir),
+        None => {
+            warn!("no game install found");
+            Ok(GameVersionInfo::default())
+        }
+    }
+}
+
+/// Detect the game version in an explicit game directory (e.g. a
+/// downloaded build), independent of the located Steam install.
+pub fn detect_dir(game_dir: &Path) -> Result<GameVersionInfo> {
     let mut info = GameVersionInfo::default();
 
-    let Some(game_dir) = paths.game_dir.as_deref() else {
-        return Ok(info);
-    };
+    let java = game_dir.join("jre64/bin/java.exe");
+    if !java.is_file() {
+        anyhow::bail!(
+            "{} not found; not a Project Zomboid game directory",
+            java.display()
+        );
+    }
 
     match probe_server(game_dir) {
         Ok(Some((version, revision))) => {
@@ -165,6 +181,16 @@ fn is_revision(text: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A directory without the bundled JRE must be rejected with a clear
+    /// error instead of a confusing spawn failure.
+    #[test]
+    fn detect_dir_rejects_non_game_directory() {
+        let dir = std::env::temp_dir().join("snapoid-probe-test-empty");
+        std::fs::create_dir_all(&dir).unwrap();
+        let error = detect_dir(&dir).unwrap_err().to_string();
+        assert!(error.contains("not a Project Zomboid game directory"));
+    }
 
     #[test]
     fn parses_server_version_line() {

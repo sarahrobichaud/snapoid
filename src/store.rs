@@ -359,7 +359,7 @@ fn store_root(game_dir: Option<&Path>) -> Option<PathBuf> {
 }
 
 /// True when running under WSL (kernel release reports Microsoft/WSL).
-fn is_wsl() -> bool {
+pub(crate) fn is_wsl() -> bool {
     std::fs::read_to_string("/proc/sys/kernel/osrelease")
         .map(|release| {
             let release = release.to_ascii_lowercase();
