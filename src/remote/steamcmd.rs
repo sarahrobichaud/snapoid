@@ -30,6 +30,20 @@ pub fn public_manifest(program: &Path, app_id: u32, depot: u64) -> Result<u64> {
     })
 }
 
+/// Query the current public buildid and depot manifest in a single
+/// `app_info_print` pass — callers checking both (the `latest` skip
+/// logic) avoid spinning steamcmd up twice.
+pub fn public_build(program: &Path, app_id: u32, depot: u64) -> Result<(u64, u64)> {
+    let output = app_info(program, app_id)?;
+    let buildid = parse_buildid(&output).with_context(|| {
+        format!("no public-branch buildid for app {app_id} in app_info_print output")
+    })?;
+    let manifest = parse_manifest(&output, depot).with_context(|| {
+        format!("no public-branch manifest for depot {depot} of app {app_id} in app_info_print output")
+    })?;
+    Ok((buildid, manifest))
+}
+
 /// Run `+app_info_print <app_id>` as anonymous and return the raw output.
 fn app_info(program: &Path, app_id: u32) -> Result<String> {
     let args = [
@@ -58,7 +72,8 @@ fn parse_buildid(output: &str) -> Option<u64> {
 }
 
 /// Extract the public branch's manifest ID for `depot` from
-/// `app_info_print` output:
+/// `app_info_print` output. Current appinfo nests the GID one level
+/// deeper than the old flat form:
 ///
 /// ```text
 /// "depots"
@@ -67,11 +82,13 @@ fn parse_buildid(output: &str) -> Option<u64> {
 ///     {
 ///         "manifests"
 ///         {
-///             "public"    "2378094061158458897"
+///             "public"
+///             {
+///                 "gid"    "2378094061158458897"
 /// ```
 fn parse_manifest(output: &str, depot: u64) -> Option<u64> {
     let depot_key = depot.to_string();
-    let path = ["depots", depot_key.as_str(), "manifests", "public"];
+    let path = ["depots", depot_key.as_str(), "manifests", "public", "gid"];
     value_at_path(output, &path)?.parse().ok()
 }
 
@@ -160,7 +177,10 @@ mod tests {
             {
                 "manifests"
                 {
-                    "public"    "1111111111111111111"
+                    "public"
+                    {
+                        "gid"    "1111111111111111111"
+                    }
                 }
             }
             "108604"
@@ -168,7 +188,10 @@ mod tests {
                 "maxsize"    "4294967296"
                 "manifests"
                 {
-                    "public"    "2378094061158458897"
+                    "public"
+                    {
+                        "gid"    "2378094061158458897"
+                    }
                 }
                 "encryptedmanifests"
                 {

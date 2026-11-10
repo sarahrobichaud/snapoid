@@ -33,6 +33,9 @@ pub struct Entry {
     pub manifest: u64,
     /// Depot ID for `download_depot`, when known.
     pub depot: Option<u64>,
+    /// Steam build ID of the build, when known (SteamDB lookup). Lets a
+    /// pinned download satisfy the `latest` buildid check.
+    pub buildid: Option<u64>,
 }
 
 #[derive(Debug)]
@@ -90,6 +93,7 @@ fn parse(text: &str) -> Result<Vec<Entry>> {
             version: build.version,
             manifest: build.manifest,
             depot: build.depot,
+            buildid: build.buildid,
         })
         .collect())
 }
@@ -106,6 +110,8 @@ struct FileEntry {
     manifest: u64,
     #[serde(default)]
     depot: Option<u64>,
+    #[serde(default)]
+    buildid: Option<u64>,
 }
 
 #[cfg(test)]
@@ -117,6 +123,7 @@ mod tests {
             version: version.to_owned(),
             manifest,
             depot: None,
+            buildid: None,
         }
     }
 
@@ -126,7 +133,7 @@ mod tests {
             "builds": [
                 { "version": "42.22.2", "manifest": 2378094061158458897 },
                 { "version": "", "manifest": 1 },
-                { "version": "42.21.0", "manifest": 7544133343391543313, "depot": 108601 }
+                { "version": "42.21.0", "manifest": 7544133343391543313, "depot": 108604, "buildid": 25485521 }
             ]
         }"#;
         let entries = parse(text).unwrap();
@@ -137,7 +144,8 @@ mod tests {
                 Entry {
                     version: "42.21.0".to_owned(),
                     manifest: 7544133343391543313,
-                    depot: Some(108601),
+                    depot: Some(108604),
+                    buildid: Some(25485521),
                 },
             ]
         );

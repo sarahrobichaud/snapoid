@@ -167,6 +167,23 @@ fn find_game_dir(libraries: &[PathBuf]) -> Option<PathBuf> {
         .find(|p| p.is_dir())
 }
 
+/// Buildid of the installed app, read from the appmanifest in the
+/// library holding `game_dir` (.../steamapps/common/<name>). None when
+/// the manifest is missing or unparsable.
+pub fn installed_buildid(game_dir: &Path, app_id: u32) -> Option<u64> {
+    let text = std::fs::read_to_string(
+        game_dir
+            .parent()?
+            .parent()?
+            .join(format!("appmanifest_{app_id}.acf")),
+    )
+    .ok()?;
+    let Acf::Map(map) = acf::parse(&text).ok()? else {
+        return None;
+    };
+    map.get("buildid")?.as_str()?.parse().ok()
+}
+
 /// The Zomboid user data dir sits next to the user's profile
 /// (%UserProfile%\Zomboid on Windows). Under WSL, probe the Windows users
 /// mounted at /mnt/c/Users.

@@ -15,10 +15,8 @@
 //! must therefore pass Windows-style paths for arguments like
 //! `+force_install_dir` (see `store::wslpath`).
 
-use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::sync::mpsc;
 
 use anyhow::{Context, Result};
 
@@ -123,55 +121,6 @@ pub fn capture(program: &Path, args: &[String]) -> Result<String> {
     let mut text = String::from_utf8_lossy(&output.stdout).into_owned();
     text.push_str(&String::from_utf8_lossy(&output.stderr));
     Ok(text)
-}
-
-/// Run steamcmd with `args`, streaming its output to the terminal while
-/// also capturing it, so callers can verify `Success!`/`Error!` lines
-/// (exit codes are unreliable). stdin is inherited so interactive login
-/// prompts work.
-pub fn run_streaming(program: &Path, args: &[String]) -> Result<String> {
-    debug!("steamcmd: {} {}", program.display(), args.join(" "));
-    let mut child = command(program)
-        .args(args)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .with_context(|| format!("running {}", program.display()))?;
-
-    let stdout = child.stdout.take().context("no piped stdout")?;
-    let stderr = child.stderr.take().context("no piped stderr")?;
-    let (tx, rx) = mpsc::channel::<String>();
-    let tx_out = tx.clone();
-    let tx_err = tx.clone();
-    let out_reader = std::thread::spawn(move || {
-        for line in BufReader::new(stdout).lines().map_while(Result::ok) {
-            println!("{line}");
-            let _ = tx_out.send(line);
-        }
-    });
-    let err_reader = std::thread::spawn(move || {
-        for line in BufReader::new(stderr).lines().map_while(Result::ok) {
-            eprintln!("{line}");
-            let _ = tx_err.send(line);
-        }
-    });
-    drop(tx);
-
-    let status = child
-        .wait()
-        .with_context(|| format!("waiting for {}", program.display()))?;
-    let _ = out_reader.join();
-    let _ = err_reader.join();
-
-    let mut output = String::new();
-    while let Ok(line) = rx.recv() {
-        output.push_str(&line);
-        output.push('\n');
-    }
-    if !status.success() {
-        anyhow::bail!("steamcmd exited with {status}");
-    }
-    Ok(output)
 }
 
 /// Build the Command for steamcmd. Under WSL, Windows binaries are

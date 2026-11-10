@@ -49,6 +49,8 @@ struct Meta {
     revision: Option<String>,
     #[serde(default)]
     buildid: Option<u64>,
+    #[serde(default)]
+    manifest: Option<u64>,
     /// Unix seconds at creation time.
     created: u64,
 }
@@ -62,6 +64,11 @@ pub struct StoredGame {
     /// appmanifest; depot downloads don't have one). Used to detect that
     /// a `latest` download is already stored.
     pub buildid: Option<u64>,
+    /// Depot manifest ID, when known (pinned downloads record the
+    /// registry's manifest). Also used by the `latest` skip check — it
+    /// covers branch reverts, where an old manifest becomes current
+    /// again.
+    pub manifest: Option<u64>,
     pub dir: PathBuf,
     pub created: u64,
 }
@@ -157,12 +164,14 @@ impl Store {
     ///
     /// Only the game install itself is captured: mods and home-folder data
     /// are excluded. Re-snapshotting an existing version replaces it
-    /// atomically via a staging directory.
+    /// atomically via a staging directory. `buildid` is the Steam build
+    /// the install is at (from its appmanifest), when known.
     pub fn snapshot_version(
         &self,
         game_dir: &Path,
         version: &str,
         revision: Option<&str>,
+        buildid: Option<u64>,
     ) -> Result<StoredGame> {
         let created = unix_now();
         let safe = sanitize_name(version);
@@ -196,7 +205,8 @@ impl Store {
             &Meta {
                 version: version.to_owned(),
                 revision: revision.map(str::to_owned),
-                buildid: None,
+                buildid,
+                manifest: None,
                 created,
             },
         )?;
@@ -206,7 +216,8 @@ impl Store {
         Ok(StoredGame {
             version: version.to_owned(),
             revision: revision.map(str::to_owned),
-            buildid: None,
+            buildid,
+            manifest: None,
             dir,
             created,
         })
@@ -227,6 +238,7 @@ impl Store {
         version: &str,
         revision: Option<&str>,
         buildid: Option<u64>,
+        manifest: Option<u64>,
     ) -> Result<StoredGame> {
         let created = unix_now();
         let safe = sanitize_name(version);
@@ -259,6 +271,7 @@ impl Store {
                 version: version.to_owned(),
                 revision: revision.map(str::to_owned),
                 buildid,
+                manifest,
                 created,
             },
         )?;
@@ -267,6 +280,7 @@ impl Store {
             version: version.to_owned(),
             revision: revision.map(str::to_owned),
             buildid,
+            manifest,
             dir,
             created,
         })
@@ -294,6 +308,7 @@ impl Store {
                 version: version.to_owned(),
                 revision: revision.map(str::to_owned),
                 buildid: Some(buildid),
+                manifest: None,
                 created: unix_now(),
             },
         };
@@ -322,6 +337,7 @@ impl Store {
                     .unwrap_or_else(|| entry.file_name().to_string_lossy().into_owned()),
                 revision: meta.as_ref().and_then(|m| m.revision.clone()),
                 buildid: meta.as_ref().and_then(|m| m.buildid),
+                manifest: meta.as_ref().and_then(|m| m.manifest),
                 dir: path,
                 created: meta.as_ref().map(|m| m.created).unwrap_or(0),
             });
@@ -372,6 +388,7 @@ impl Store {
                 version: version.to_owned(),
                 revision: revision.clone(),
                 buildid: None,
+                manifest: None,
                 created,
             },
         )?;
@@ -947,10 +964,12 @@ mod tests {
         fs::write(from.join("projectzomboid.jar"), "jar")?;
         fs::write(from.join("jre64/bin/java.exe"), "jvm")?;
 
-        let game = store.adopt_game_dir(&from, "42.22.2", Some("3d39148846"), Some(17_774_562))?;
+        let game =
+            store.adopt_game_dir(&from, "42.22.2", Some("3d39148846"), Some(17_774_562), None)?;
         assert_eq!(game.version, "42.22.2");
         assert_eq!(game.revision.as_deref(), Some("3d39148846"));
         assert_eq!(game.buildid, Some(17_774_562));
+        assert_eq!(game.manifest, None);
         assert_eq!(game.dir, store.game_dir("42.22.2"));
         assert!(game.dir.join("projectzomboid.jar").is_file());
         assert!(game.dir.join("game.json").is_file());
@@ -960,11 +979,14 @@ mod tests {
         // Re-adopting the same version replaces it.
         fs::create_dir_all(&from)?;
         fs::write(from.join("projectzomboid.jar"), "new jar")?;
-        store.adopt_game_dir(&from, "42.22.2", None, None)?;
+        store.adopt_game_dir(&from, "42.22.2", None, None, Some(2378094061158458897))?;
         assert_eq!(
             fs::read_to_string(store.game_dir("42.22.2").join("projectzomboid.jar"))?,
             "new jar"
         );
+        // The re-adopt recorded the manifest for the latest check.
+        let games = store.list_games()?;
+        assert_eq!(games[0].manifest, Some(2378094061158458897));
 
         fs::remove_dir_all(&base)?;
         Ok(())

@@ -239,11 +239,19 @@ fn main() -> anyhow::Result<()> {
                 };
 
                 let store = store::Store::open(paths.game_dir.as_deref())?;
-                let game =
-                    store.snapshot_version(game_dir, version_str, version.revision.as_deref())?;
+                let buildid = scanner::steam::installed_buildid(game_dir, scanner::steam::PZ_APP_ID);
+                let game = store.snapshot_version(
+                    game_dir,
+                    version_str,
+                    version.revision.as_deref(),
+                    buildid,
+                )?;
                 println!("game version {} captured", game.version);
                 if let Some(revision) = &game.revision {
                     println!("  revision: {revision}");
+                }
+                if let Some(buildid) = game.buildid {
+                    println!("  build:    {buildid}");
                 }
                 println!("  path:     {}", game.dir.display());
             }
@@ -269,6 +277,9 @@ fn main() -> anyhow::Result<()> {
                         captured,
                         game.dir.display()
                     );
+                    if let Some(buildid) = game.buildid {
+                        println!("  build:    {buildid}");
+                    }
                 }
             }
             VersionCommand::Download {

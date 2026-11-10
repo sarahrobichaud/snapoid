@@ -13,4 +13,4 @@
 
 pub mod steamcmd;
 
-pub use steamcmd::current_buildid;
+pub use steamcmd::public_build;

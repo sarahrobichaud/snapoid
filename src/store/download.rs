@@ -60,28 +60,30 @@ pub fn download(
 
 /// Download the current live build via `+app_update` into a provisional
 /// dir in the store, probe it for its version, and rename it into place.
-/// A cheap buildid check first: when the current public build is already
-/// stored, the multi-gigabyte download is skipped.
+/// A cheap check first: when the current public build (by buildid or
+/// depot manifest) is already stored, the multi-gigabyte download is
+/// skipped. The manifest check also covers branch reverts, where an old
+/// pinned download becomes the current build again.
 fn download_latest(
     store: &Store,
     program: &Path,
     login: Option<&str>,
     force: bool,
 ) -> Result<Downloaded> {
-    let current = match remote::current_buildid(program, PZ_APP_ID) {
-        Ok(buildid) => Some(buildid),
+    let current = match remote::public_build(program, PZ_APP_ID, WINDOWS_DEPOT) {
+        Ok((buildid, manifest)) => Some((buildid, manifest)),
         Err(error) => {
-            warn!("could not query the current buildid ({error:#}); downloading anyway");
+            warn!("could not query the current build ({error:#}); downloading anyway");
             None
         }
     };
     if !force {
-        if let Some(buildid) = current {
-            if let Some(existing) = store
+        if let Some((buildid, manifest)) = current {
+            let existing = store
                 .list_games()?
                 .into_iter()
-                .find(|game| game.buildid == Some(buildid))
-            {
+                .find(|game| game.buildid == Some(buildid) || game.manifest == Some(manifest));
+            if let Some(existing) = existing {
                 info!(
                     "latest (build {buildid}) is already stored as version {}; skipping",
                     existing.version
@@ -143,7 +145,8 @@ fn download_latest(
         &staging,
         &version,
         info.revision.as_deref(),
-        appmanifest_buildid(&staging.join("steamapps")).or(current),
+        appmanifest_buildid(&staging.join("steamapps")).or(current.map(|(buildid, _)| buildid)),
+        current.map(|(_, manifest)| manifest),
     )?;
     Ok(Downloaded {
         version: game.version,
@@ -209,12 +212,23 @@ fn download_pinned(
     depot_override: Option<u64>,
     force: bool,
 ) -> Result<Downloaded> {
+    let reg = registry::load()?;
+    let entry = reg.entries.iter().find(|entry| entry.version == version);
+
     if !force {
         if let Some(existing) = store
             .list_games()?
             .into_iter()
             .find(|game| game.version == version)
         {
+            // Reconcile metadata the registry learned since the download
+            // (e.g. a buildid added to the registry afterwards).
+            if let Some(buildid) = entry.and_then(|entry| entry.buildid) {
+                if existing.buildid.is_none() {
+                    info!("recording build {buildid} for version {version}");
+                    store.set_game_buildid(version, existing.revision.as_deref(), buildid)?;
+                }
+            }
             info!("version {version} is already stored; use --force to re-download");
             return Ok(Downloaded {
                 version: existing.version,
@@ -227,14 +241,11 @@ fn download_pinned(
 
     let login = require_login(login)?;
 
-    let reg = registry::load()?;
-    let entry = reg
-        .entries
-        .iter()
-        .find(|entry| entry.version == version)
+    let entry = entry
         .with_context(|| format!("{version} is not in the registry; see `snapoid version available`"))?;
     let manifest = entry.manifest;
     let depot = depot_override.or(entry.depot).unwrap_or(WINDOWS_DEPOT);
+    let buildid = entry.buildid;
 
     let mut args = vec!["+login".to_owned(), login.to_owned()];
     args.extend([
@@ -244,21 +255,34 @@ fn download_pinned(
         manifest.to_string(),
         "+quit".to_owned(),
     ]);
-    let output = steamcmd::run_streaming(program, &args)?;
-    if !steamcmd::reports_success(&output) {
-        anyhow::bail!("steamcmd did not report success for the depot download");
-    }
+    // Inherited stdio: steamcmd renders its own progress and prompts
+    // (password, Steam Guard) directly on the terminal. Piping its output
+    // would hide those prompts (they have no trailing newline, so a
+    // line-based reader never shows them and the command appears to
+    // hang). Success is verified by the downloaded dir below, since
+    // steamcmd's exit codes are unreliable.
+    info!(
+        "downloading depot {depot} (steamcmd caches it under its own \
+         steamapps dir; it is moved into the store afterwards)"
+    );
+    steamcmd::run(program, &args)?;
 
     let steamcmd_dir = program
         .parent()
         .context("steamcmd has no parent directory")?;
-    let downloaded = steamcmd_dir
-        .join("steamapps/downloading")
-        .join(PZ_APP_ID.to_string())
-        .join(depot.to_string());
-    if !downloaded.is_dir() {
+    let Some(downloaded) = depot_download_dir(steamcmd_dir, PZ_APP_ID, depot) else {
         anyhow::bail!(
-            "steamcmd reported success but {} does not exist",
+            "steamcmd did not download anything; expected it under \
+             steamapps/content/app_{PZ_APP_ID}/depot_{depot} or \
+             steamapps/downloading/{PZ_APP_ID}/{depot}; check its output above"
+        );
+    };
+    let empty = std::fs::read_dir(&downloaded)
+        .map(|mut entries| entries.next().is_none())
+        .unwrap_or(true);
+    if empty {
+        anyhow::bail!(
+            "steamcmd left nothing in {}; check its output above",
             downloaded.display()
         );
     }
@@ -283,7 +307,13 @@ fn download_pinned(
     // Adopting moves the downloaded dir into the store, so no separate
     // cache cleanup is needed; any sibling depot dirs steamcmd left
     // behind stay in its cache.
-    let game = store.adopt_game_dir(&downloaded, version, revision.as_deref(), None)?;
+    let game = store.adopt_game_dir(
+        &downloaded,
+        version,
+        revision.as_deref(),
+        buildid,
+        Some(manifest),
+    )?;
     debug!("{} adopted into the store", game.dir.display());
     Ok(Downloaded {
         version: game.version,
@@ -296,6 +326,24 @@ fn download_pinned(
 /// Format a path for steamcmd. Under WSL the Windows binary needs the
 /// Windows form of the path (C:\...), everywhere else the path is used
 /// as-is.
+/// Where steamcmd drops `download_depot` results. Newer versions use
+/// `steamapps/content/app_<appid>/depot_<depotid>`, older ones
+/// `steamapps/downloading/<appid>/<depotid>`.
+fn depot_download_dir(steamcmd_dir: &Path, app_id: u32, depot: u64) -> Option<std::path::PathBuf> {
+    let content = steamcmd_dir
+        .join("steamapps/content")
+        .join(format!("app_{app_id}"))
+        .join(format!("depot_{depot}"));
+    if content.is_dir() {
+        return Some(content);
+    }
+    let downloading = steamcmd_dir
+        .join("steamapps/downloading")
+        .join(app_id.to_string())
+        .join(depot.to_string());
+    downloading.is_dir().then_some(downloading)
+}
+
 /// steamcmd needs a logged-in account that owns the game for
 /// `app_update` and `download_depot` — and `+login` with no arguments is
 /// a usage error, not an interactive prompt, so it must be provided.
