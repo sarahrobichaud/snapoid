@@ -8,6 +8,7 @@
 
 mod api;
 mod deploy;
+mod download;
 mod fmt;
 mod logger;
 mod parser;
@@ -86,6 +87,21 @@ enum VersionCommand {
     List,
     /// List game versions available for download
     Available,
+    /// Download a game version into the store
+    Download {
+        /// Version to download (see `version available`), or "latest"
+        version: String,
+        /// Steam account name for steamcmd (password prompted by steamcmd)
+        #[arg(short, long)]
+        login: Option<String>,
+        /// Depot ID override (default: the registry entry's depot, else
+        /// the Windows depot 108604)
+        #[arg(long)]
+        depot: Option<u64>,
+        /// Download even if the version is already stored
+        #[arg(long)]
+        force: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -288,6 +304,37 @@ fn main() -> anyhow::Result<()> {
                         game.dir.display()
                     );
                 }
+            }
+            VersionCommand::Download {
+                version,
+                login,
+                depot,
+                force,
+            } => {
+                let program = steamcmd::locate()?;
+                let game_dir = scanner::steam::locate().ok().and_then(|p| p.game_dir);
+                let store = store::Store::open(game_dir.as_deref())?;
+                let downloaded = download::download(
+                    &store,
+                    &program,
+                    &version,
+                    login.as_deref(),
+                    depot,
+                    force,
+                )?;
+                println!(
+                    "game version {} {}",
+                    downloaded.version,
+                    if downloaded.fresh {
+                        "downloaded"
+                    } else {
+                        "already stored"
+                    }
+                );
+                if let Some(revision) = &downloaded.revision {
+                    println!("  revision: {revision}");
+                }
+                println!("  path:     {}", downloaded.dir.display());
             }
             VersionCommand::Available => {
                 let registry = registry::load()?;

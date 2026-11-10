@@ -31,6 +31,8 @@ pub struct Entry {
     pub version: String,
     /// Depot manifest ID for `download_depot`.
     pub manifest: u64,
+    /// Depot ID for `download_depot`, when known.
+    pub depot: Option<u64>,
 }
 
 #[derive(Debug)]
@@ -87,6 +89,7 @@ fn parse(text: &str) -> Result<Vec<Entry>> {
         .map(|build| Entry {
             version: build.version,
             manifest: build.manifest,
+            depot: build.depot,
         })
         .collect())
 }
@@ -101,6 +104,8 @@ struct RegistryFile {
 struct FileEntry {
     version: String,
     manifest: u64,
+    #[serde(default)]
+    depot: Option<u64>,
 }
 
 #[cfg(test)]
@@ -111,6 +116,7 @@ mod tests {
         Entry {
             version: version.to_owned(),
             manifest,
+            depot: None,
         }
     }
 
@@ -120,7 +126,7 @@ mod tests {
             "builds": [
                 { "version": "42.22.2", "manifest": 2378094061158458897 },
                 { "version": "", "manifest": 1 },
-                { "version": "42.21.0", "manifest": 7544133343391543313 }
+                { "version": "42.21.0", "manifest": 7544133343391543313, "depot": 108601 }
             ]
         }"#;
         let entries = parse(text).unwrap();
@@ -128,7 +134,11 @@ mod tests {
             entries,
             vec![
                 entry("42.22.2", 2378094061158458897),
-                entry("42.21.0", 7544133343391543313),
+                Entry {
+                    version: "42.21.0".to_owned(),
+                    manifest: 7544133343391543313,
+                    depot: Some(108601),
+                },
             ]
         );
     }

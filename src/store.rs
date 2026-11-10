@@ -41,6 +41,8 @@ struct Meta {
     version: String,
     #[serde(default)]
     revision: Option<String>,
+    #[serde(default)]
+    buildid: Option<u64>,
     /// Unix seconds at creation time.
     created: u64,
 }
@@ -50,8 +52,11 @@ struct Meta {
 pub struct StoredGame {
     pub version: String,
     pub revision: Option<String>,
+    /// Steam build ID, when known (latest downloads record it from the
+    /// appmanifest; depot downloads don't have one). Used to detect that
+    /// a `latest` download is already stored.
+    pub buildid: Option<u64>,
     pub dir: PathBuf,
-    /// Unix seconds at capture time; 0 when unknown.
     pub created: u64,
 }
 
@@ -185,6 +190,7 @@ impl Store {
             &Meta {
                 version: version.to_owned(),
                 revision: revision.map(str::to_owned),
+                buildid: None,
                 created,
             },
         )?;
@@ -194,12 +200,100 @@ impl Store {
         Ok(StoredGame {
             version: version.to_owned(),
             revision: revision.map(str::to_owned),
+            buildid: None,
             dir,
             created,
         })
     }
 
-    /// List stored game versions, sorted by version.
+    /// Move an externally populated game directory into `game/<version>/`
+    /// and write its meta file.
+    ///
+    /// Used by the downloader, which installs builds straight into the
+    /// store instead of copying them from the live install. `from` is
+    /// consumed: renamed when the filesystems match, copied and removed
+    /// otherwise. Re-adopting an existing version replaces it, with the
+    /// old copy kept as a dot-prefixed sibling until the new one is in
+    /// place.
+    pub fn adopt_game_dir(
+        &self,
+        from: &Path,
+        version: &str,
+        revision: Option<&str>,
+        buildid: Option<u64>,
+    ) -> Result<StoredGame> {
+        let created = unix_now();
+        let safe = sanitize_name(version);
+        let dir = self.games_dir().join(&safe);
+
+        if from != dir {
+            if dir.exists() {
+                let retired = self.games_dir().join(format!(".retired-{safe}"));
+                if retired.exists() {
+                    fs::remove_dir_all(&retired)
+                        .with_context(|| format!("clearing {}", retired.display()))?;
+                }
+                fs::rename(&dir, &retired)
+                    .with_context(|| format!("retiring {}", dir.display()))?;
+                if let Err(error) = move_dir(from, &dir) {
+                    fs::rename(&retired, &dir)
+                        .with_context(|| format!("restoring {}", dir.display()))?;
+                    return Err(error);
+                }
+                fs::remove_dir_all(&retired)
+                    .with_context(|| format!("removing {}", retired.display()))?;
+            } else {
+                move_dir(from, &dir)?;
+            }
+        }
+
+        write_meta(
+            &dir.join("game.json"),
+            &Meta {
+                version: version.to_owned(),
+                revision: revision.map(str::to_owned),
+                buildid,
+                created,
+            },
+        )?;
+
+        Ok(StoredGame {
+            version: version.to_owned(),
+            revision: revision.map(str::to_owned),
+            buildid,
+            dir,
+            created,
+        })
+    }
+
+    /// Record the Steam buildid for an already-stored version, creating
+    /// the meta when it does not exist yet (versions stored before meta
+    /// writing). `revision` fills a missing revision fingerprint.
+    pub fn set_game_buildid(
+        &self,
+        version: &str,
+        revision: Option<&str>,
+        buildid: u64,
+    ) -> Result<()> {
+        let path = self.game_dir(version).join("game.json");
+        let meta = match read_meta(&path)? {
+            Some(mut meta) => {
+                meta.buildid = Some(buildid);
+                if meta.revision.is_none() {
+                    meta.revision = revision.map(str::to_owned);
+                }
+                meta
+            }
+            None => Meta {
+                version: version.to_owned(),
+                revision: revision.map(str::to_owned),
+                buildid: Some(buildid),
+                created: unix_now(),
+            },
+        };
+        write_meta(&path, &meta)
+    }
+
     pub fn list_games(&self) -> Result<Vec<StoredGame>> {
         let dir = self.games_dir();
         if !dir.is_dir() {
@@ -221,6 +315,7 @@ impl Store {
                     .map(|m| m.version.clone())
                     .unwrap_or_else(|| entry.file_name().to_string_lossy().into_owned()),
                 revision: meta.as_ref().and_then(|m| m.revision.clone()),
+                buildid: meta.as_ref().and_then(|m| m.buildid),
                 dir: path,
                 created: meta.as_ref().map(|m| m.created).unwrap_or(0),
             });
@@ -270,6 +365,7 @@ impl Store {
             &Meta {
                 version: version.to_owned(),
                 revision: revision.clone(),
+                buildid: None,
                 created,
             },
         )?;
@@ -501,7 +597,7 @@ fn junction_via_interop(link: &Path, target: &Path) -> Result<bool> {
 
 /// Convert a path to its Windows form via wslpath; None when unavailable.
 #[cfg(unix)]
-fn wslpath(path: &Path) -> Option<String> {
+pub(crate) fn wslpath(path: &Path) -> Option<String> {
     let output = Command::new("wslpath").arg("-w").arg(path).output().ok()?;
     if !output.status.success() {
         return None;
@@ -512,6 +608,19 @@ fn wslpath(path: &Path) -> Option<String> {
 
 /// Replace `dir` with `staging`, keeping the old copy until the swap
 /// succeeds so a failed rename cannot lose an existing instance.
+/// Move a directory: rename when the filesystems match, copy and remove
+/// the source when they do not (e.g. steamcmd's download cache on another
+/// drive than the store).
+fn move_dir(from: &Path, to: &Path) -> Result<()> {
+    if fs::rename(from, to).is_ok() {
+        return Ok(());
+    }
+    let mut progress = CopyProgress::disabled();
+    copy_tree(from, to, true, &mut progress)?;
+    fs::remove_dir_all(from).with_context(|| format!("removing {}", from.display()))?;
+    Ok(())
+}
+
 fn swap_into_place(staging: &Path, dir: &Path) -> Result<()> {
     let parent = dir
         .parent()
@@ -817,6 +926,39 @@ mod tests {
 
         // Measurement mirrors the copy exclusions (3+3+3 bytes).
         assert_eq!(measure_tree(&src, true)?, (3, 9));
+
+        fs::remove_dir_all(&base)?;
+        Ok(())
+    }
+
+    #[test]
+    fn adopts_downloaded_dir_into_place() -> Result<()> {
+        let base = std::env::temp_dir().join(format!("snapoid-adopt-{}", std::process::id()));
+        let store = Store::open_at(&base)?;
+
+        let from = base.join("incoming");
+        fs::create_dir_all(from.join("jre64/bin"))?;
+        fs::write(from.join("projectzomboid.jar"), "jar")?;
+        fs::write(from.join("jre64/bin/java.exe"), "jvm")?;
+
+        let game = store.adopt_game_dir(&from, "42.22.2", Some("3d39148846"), Some(17_774_562))?;
+        assert_eq!(game.version, "42.22.2");
+        assert_eq!(game.revision.as_deref(), Some("3d39148846"));
+        assert_eq!(game.buildid, Some(17_774_562));
+        assert_eq!(game.dir, store.game_dir("42.22.2"));
+        assert!(game.dir.join("projectzomboid.jar").is_file());
+        assert!(game.dir.join("game.json").is_file());
+        assert!(!from.exists(), "source must be consumed");
+        assert!(store.list_games()?.iter().any(|g| g.version == "42.22.2"));
+
+        // Re-adopting the same version replaces it.
+        fs::create_dir_all(&from)?;
+        fs::write(from.join("projectzomboid.jar"), "new jar")?;
+        store.adopt_game_dir(&from, "42.22.2", None, None)?;
+        assert_eq!(
+            fs::read_to_string(store.game_dir("42.22.2").join("projectzomboid.jar"))?,
+            "new jar"
+        );
 
         fs::remove_dir_all(&base)?;
         Ok(())

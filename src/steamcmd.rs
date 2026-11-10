@@ -15,8 +15,10 @@
 //! must therefore pass Windows-style paths for arguments like
 //! `+force_install_dir` (see `store::wslpath`).
 
+use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::mpsc;
 
 use anyhow::{Context, Result};
 
@@ -123,6 +125,55 @@ pub fn capture(program: &Path, args: &[String]) -> Result<String> {
     Ok(text)
 }
 
+/// Run steamcmd with `args`, streaming its output to the terminal while
+/// also capturing it, so callers can verify `Success!`/`Error!` lines
+/// (exit codes are unreliable). stdin is inherited so interactive login
+/// prompts work.
+pub fn run_streaming(program: &Path, args: &[String]) -> Result<String> {
+    debug!("steamcmd: {} {}", program.display(), args.join(" "));
+    let mut child = command(program)
+        .args(args)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .with_context(|| format!("running {}", program.display()))?;
+
+    let stdout = child.stdout.take().context("no piped stdout")?;
+    let stderr = child.stderr.take().context("no piped stderr")?;
+    let (tx, rx) = mpsc::channel::<String>();
+    let tx_out = tx.clone();
+    let tx_err = tx.clone();
+    let out_reader = std::thread::spawn(move || {
+        for line in BufReader::new(stdout).lines().map_while(Result::ok) {
+            println!("{line}");
+            let _ = tx_out.send(line);
+        }
+    });
+    let err_reader = std::thread::spawn(move || {
+        for line in BufReader::new(stderr).lines().map_while(Result::ok) {
+            eprintln!("{line}");
+            let _ = tx_err.send(line);
+        }
+    });
+    drop(tx);
+
+    let status = child
+        .wait()
+        .with_context(|| format!("waiting for {}", program.display()))?;
+    let _ = out_reader.join();
+    let _ = err_reader.join();
+
+    let mut output = String::new();
+    while let Ok(line) = rx.recv() {
+        output.push_str(&line);
+        output.push('\n');
+    }
+    if !status.success() {
+        anyhow::bail!("steamcmd exited with {status}");
+    }
+    Ok(output)
+}
+
 /// Build the Command for steamcmd. Under WSL, Windows binaries are
 /// anchored to their own directory: steamcmd misbehaves when the working
 /// directory is a WSL path (it cannot map it into Windows terms), while
@@ -139,6 +190,53 @@ fn command(program: &Path) -> Command {
         }
     }
     cmd
+}
+
+/// Query the current build ID of an app's public branch via
+/// `app_info_print` — a cheap metadata read, no download. Used to detect
+/// whether a `latest` download is already stored.
+pub fn current_buildid(program: &Path, app_id: u32) -> Result<u64> {
+    let args = vec![
+        "+login".to_owned(),
+        "anonymous".to_owned(),
+        "+app_info_print".to_owned(),
+        app_id.to_string(),
+        "+quit".to_owned(),
+    ];
+    let output = capture(program, &args)?;
+    parse_buildid(&output)
+        .with_context(|| format!("no public-branch buildid for app {app_id} in app_info_print output"))
+}
+
+/// Extract the public branch's buildid from `app_info_print` output:
+///
+/// ```text
+/// "branches"
+/// {
+///     "public"
+///     {
+///         "buildid"    "17774562"
+/// ```
+fn parse_buildid(output: &str) -> Option<u64> {
+    let mut in_public = false;
+    for line in output.lines() {
+        let line = line.trim();
+        if line.starts_with("\"branches\"") {
+            in_public = false;
+            continue;
+        }
+        if line.starts_with("\"public\"") {
+            in_public = true;
+            continue;
+        }
+        if in_public {
+            if let Some(rest) = line.strip_prefix("\"buildid\"") {
+                let value = rest.trim().trim_matches('"');
+                return value.parse().ok();
+            }
+        }
+    }
+    None
 }
 
 /// Heuristic success check for captured steamcmd output. Scans backwards
@@ -167,6 +265,13 @@ fn from_path(name: &str) -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parses_public_branch_buildid() {
+        let output = "\"appinfo\"\n{\n    \"branches\"\n    {\n        \"public\"\n        {\n            \"buildid\"    \"17774562\"\n            \"timeupdated\"    \"1700000000\"\n        }\n        \"unstable\"\n        {\n            \"buildid\"    \"999\"\n        }\n    }\n}";
+        assert_eq!(parse_buildid(output), Some(17_774_562));
+        assert_eq!(parse_buildid("no branches here"), None);
+    }
 
     #[test]
     fn parses_success_and_error_lines() {
