@@ -45,6 +45,8 @@ enum Commands {
     },
     /// Check the Steam Web API for upstream updates
     Check,
+    /// Detect the installed game version (briefly spawns the headless server)
+    Version,
     /// Show the resolved Steam and Project Zomboid paths
     Paths,
 }
@@ -125,6 +127,21 @@ fn main() -> anyhow::Result<()> {
         Commands::Check => {
             todo!("collect installed ids, query api::fetch_remote, diff against the store")
         }
+        Commands::Version => {
+            let paths = scanner::steam::locate()?;
+            let info = scanner::game_version::detect(&paths)?;
+            println!("version:  {}", info.version.as_deref().unwrap_or("unknown"));
+            println!(
+                "revision: {}",
+                info.revision.as_deref().unwrap_or("unknown")
+            );
+            println!(
+                "source:   {}",
+                info.source
+                    .map(|source| format!("{source:?}"))
+                    .unwrap_or_else(|| "none".to_owned())
+            );
+        }
         Commands::Paths => {
             let paths = scanner::steam::locate()?;
             println!("Steam root:       {}", paths.steam_dir.display());
@@ -141,6 +158,8 @@ fn main() -> anyhow::Result<()> {
                 "Game install:     {}",
                 optional_path(paths.game_dir.as_deref())
             );
+            let version = scanner::game_version::detect(&paths)?;
+            println!("Game version:     {}", describe_version(&version));
             println!(
                 "Zomboid user dir: {}",
                 optional_path(paths.zomboid_user_dir.as_deref())
@@ -155,4 +174,16 @@ fn main() -> anyhow::Result<()> {
 fn optional_path(path: Option<&std::path::Path>) -> String {
     path.map(|p| p.display().to_string())
         .unwrap_or_else(|| "(not found)".to_string())
+}
+
+/// Format detected game version info for display.
+fn describe_version(info: &scanner::game_version::GameVersionInfo) -> String {
+    let version = info.version.as_deref().unwrap_or("unknown");
+    match (&info.revision, info.source) {
+        (Some(revision), Some(source)) => {
+            format!("{version} (revision {revision}, from {source:?})")
+        }
+        (Some(revision), None) => format!("{version} (revision {revision})"),
+        _ => version.to_owned(),
+    }
 }
