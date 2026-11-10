@@ -84,12 +84,8 @@ enum VersionCommand {
     Snapshot,
     /// List stored game versions
     List,
-    /// Show the version → manifest registry
-    Registry {
-        /// Refetch from GitHub before showing
-        #[arg(long)]
-        refresh: bool,
-    },
+    /// List game versions available for download
+    Available,
 }
 
 #[derive(Subcommand)]
@@ -293,19 +289,10 @@ fn main() -> anyhow::Result<()> {
                     );
                 }
             }
-            VersionCommand::Registry { refresh } => {
-                let registry = if refresh {
-                    registry::refresh()?
-                } else {
-                    registry::load()?
-                };
-                let source = match registry.source {
-                    registry::Source::Remote => "remote",
-                    registry::Source::Cache => "cache",
-                };
+            VersionCommand::Available => {
+                let registry = registry::load()?;
                 println!(
-                    "source: {} ({} build{})",
-                    source,
+                    "{} build{} available:",
                     registry.entries.len(),
                     if registry.entries.len() == 1 { "" } else { "s" }
                 );

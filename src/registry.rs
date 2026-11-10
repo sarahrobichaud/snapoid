@@ -2,9 +2,8 @@
 //!
 //! Maps game versions to depot manifest IDs. The authoritative source is
 //! a registry file fetched from GitHub on every load, so new builds can be
-//! added without releasing a new tool version. The fetched file is cached
-//! locally; when the fetch fails, the last cache is used, so lookups keep
-//! working offline. With neither network nor cache, loading fails.
+//! added without releasing a new tool version. When offline, loading
+//! fails.
 //!
 //! The registry file is JSON:
 //!
@@ -12,13 +11,12 @@
 //! { "builds": [ { "version": "42.22.2", "manifest": 2378094061158458897 } ] }
 //! ```
 
-use std::path::PathBuf;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::Duration;
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
-use crate::{debug, warn};
+use crate::debug;
 
 /// Where the registry file is fetched from; override with the
 /// SNAPOID_REGISTRY_URL environment variable.
@@ -35,28 +33,9 @@ pub struct Entry {
     pub manifest: u64,
 }
 
-/// Where the loaded entries came from.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Source {
-    /// Fetched from GitHub during this load.
-    Remote,
-    /// Served from the local cache (fetch failed).
-    Cache,
-}
-
-impl Source {
-    fn as_str(self) -> &'static str {
-        match self {
-            Source::Remote => "remote",
-            Source::Cache => "cache",
-        }
-    }
-}
-
 #[derive(Debug)]
 pub struct Registry {
     pub entries: Vec<Entry>,
-    pub source: Source,
 }
 
 impl Registry {
@@ -69,45 +48,12 @@ impl Registry {
     }
 }
 
-/// Load the registry, always fetching from GitHub first. On failure,
-/// fall back to the last cached file; with neither network nor cache,
-/// return an error.
+/// Load the registry from GitHub.
 pub fn load() -> Result<Registry> {
-    match fetch_and_cache() {
-        Ok(remote) => Ok(Registry {
-            entries: remote,
-            source: Source::Remote,
-        }),
-        Err(error) => {
-            if let Some(cache) = read_cache() {
-                warn!("registry fetch failed ({error:#}); using cache");
-                Ok(Registry {
-                    entries: cache.builds,
-                    source: Source::Cache,
-                })
-            } else {
-                Err(error.context("registry fetch failed and no cache exists"))
-            }
-        }
-    }
-}
-
-/// Force a refetch from GitHub, updating the local cache. Unlike
-/// [`load`], this never falls back to the cache.
-pub fn refresh() -> Result<Registry> {
-    let remote = fetch_and_cache()?;
-    Ok(Registry {
-        entries: remote,
-        source: Source::Remote,
-    })
-}
-
-fn fetch_and_cache() -> Result<Vec<Entry>> {
     let url = registry_url();
-    let remote = fetch(&url)?;
-    write_cache(&remote)
-        .with_context(|| format!("caching the registry after fetching {url}"))?;
-    Ok(remote)
+    Ok(Registry {
+        entries: fetch(&url)?,
+    })
 }
 
 fn registry_url() -> String {
@@ -133,8 +79,7 @@ fn fetch(url: &str) -> Result<Vec<Entry>> {
 
 /// Parse a registry file. Entries with an empty version are skipped.
 fn parse(text: &str) -> Result<Vec<Entry>> {
-    let file: RegistryFile =
-        serde_json::from_str(text).context("invalid registry JSON")?;
+    let file: RegistryFile = serde_json::from_str(text).context("invalid registry JSON")?;
     Ok(file
         .builds
         .into_iter()
@@ -146,70 +91,9 @@ fn parse(text: &str) -> Result<Vec<Entry>> {
         .collect())
 }
 
-struct Cache {
-    fetched: u64,
-    builds: Vec<Entry>,
-}
-
-fn read_cache() -> Option<Cache> {
-    let text = std::fs::read_to_string(cache_path()?).ok()?;
-    let file: CacheFile = serde_json::from_str(&text).ok()?;
-    Some(Cache {
-        fetched: file.fetched,
-        builds: file
-            .builds
-            .into_iter()
-            .map(|build| Entry {
-                version: build.version,
-                manifest: build.manifest,
-            })
-            .collect(),
-    })
-}
-
-fn write_cache(entries: &[Entry]) -> Result<()> {
-    let path = cache_path().context("no cache directory available")?;
-    if let Some(parent) = path.parent() {
-        let _ = std::fs::create_dir_all(parent);
-    }
-    let file = CacheFile {
-        fetched: unix_now(),
-        builds: entries
-            .iter()
-            .map(|entry| FileEntry {
-                version: entry.version.clone(),
-                manifest: entry.manifest,
-            })
-            .collect(),
-    };
-    std::fs::write(&path, serde_json::to_string_pretty(&file)?)
-        .with_context(|| format!("writing {}", path.display()))?;
-    debug!("registry cached to {}", path.display());
-    Ok(())
-}
-
-/// Cache location, e.g. ~/.cache/snapoid/registry.json (Linux/WSL) or
-/// %LocalAppData%\snapoid\registry.json (Windows).
-fn cache_path() -> Option<PathBuf> {
-    dirs::cache_dir().map(|dir| dir.join("snapoid/registry.json"))
-}
-
-fn unix_now() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|since| since.as_secs())
-        .unwrap_or(0)
-}
-
 #[derive(Serialize, Deserialize)]
 struct RegistryFile {
     #[serde(default)]
-    builds: Vec<FileEntry>,
-}
-
-#[derive(Serialize, Deserialize)]
-struct CacheFile {
-    fetched: u64,
     builds: Vec<FileEntry>,
 }
 
