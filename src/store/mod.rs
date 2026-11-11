@@ -23,10 +23,9 @@
 pub mod download;
 
 use std::fs;
-use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
@@ -191,7 +190,7 @@ impl Store {
             "snapshot: {total_files} file(s), {} to copy",
             crate::fmt::format_bytes(total_bytes)
         );
-        let mut progress = CopyProgress::new(total_bytes);
+        let mut progress = crate::ui::Progress::new(total_bytes);
         let files = copy_tree(game_dir, &staging, true, &mut progress)?;
         progress.finish();
         info!(
@@ -352,7 +351,10 @@ impl Store {
     pub fn instance_new(&self, name: &str, version: &str) -> Result<GameInstance> {
         let game = self.game_dir(version);
         if !game.is_dir() {
-            anyhow::bail!("game version {version} is not stored; run `snapoid version snapshot` first");
+            anyhow::bail!(
+                "game version {version} is not stored; see `snapoid version list` \
+                 or download it with `snapoid version download`"
+            );
         }
         let revision = read_meta(&game.join("game.json"))
             .ok()
@@ -638,7 +640,7 @@ fn move_dir(from: &Path, to: &Path) -> Result<()> {
     if fs::rename(from, to).is_ok() {
         return Ok(());
     }
-    let mut progress = CopyProgress::disabled();
+    let mut progress = crate::ui::Progress::disabled();
     copy_tree(from, to, true, &mut progress)?;
     fs::remove_dir_all(from).with_context(|| format!("removing {}", from.display()))?;
     Ok(())
@@ -679,74 +681,6 @@ fn swap_into_place(staging: &Path, dir: &Path) -> Result<()> {
 
 /// Live copy progress rendered on stderr as `X / Y (p%)  N files`,
 /// updated in place with `\r`. Silent when stderr is redirected.
-struct CopyProgress {
-    total_bytes: u64,
-    copied_bytes: u64,
-    copied_files: u64,
-    last_render: Option<Instant>,
-    enabled: bool,
-}
-
-const RENDER_INTERVAL: Duration = Duration::from_millis(100);
-
-impl CopyProgress {
-    /// Live progress on a terminal; silent when stderr is redirected.
-    fn new(total_bytes: u64) -> Self {
-        Self {
-            total_bytes,
-            copied_bytes: 0,
-            copied_files: 0,
-            last_render: None,
-            enabled: std::io::stderr().is_terminal(),
-        }
-    }
-
-    fn disabled() -> Self {
-        Self {
-            total_bytes: 0,
-            copied_bytes: 0,
-            copied_files: 0,
-            last_render: None,
-            enabled: false,
-        }
-    }
-
-    fn step(&mut self, bytes: u64) {
-        self.copied_files += 1;
-        self.copied_bytes += bytes;
-        let now = Instant::now();
-        if self.enabled
-            && self
-                .last_render
-                .map_or(true, |last| now.duration_since(last) >= RENDER_INTERVAL)
-        {
-            self.last_render = Some(now);
-            self.render();
-        }
-    }
-
-    fn finish(&mut self) {
-        if self.enabled {
-            self.render();
-            eprintln!();
-        }
-    }
-
-    fn render(&self) {
-        let percent = if self.total_bytes == 0 {
-            100
-        } else {
-            (self.copied_bytes * 100 / self.total_bytes).min(100)
-        };
-        eprint!(
-            "\r  {} / {} ({percent}%)  {} files   ",
-            crate::fmt::format_bytes(self.copied_bytes),
-            crate::fmt::format_bytes(self.total_bytes),
-            self.copied_files
-        );
-    }
-}
-
 /// Recursively measure `src`: (file count, total bytes), using the same
 /// exclusions as [`copy_tree`] so progress totals match what gets copied.
 fn measure_tree(src: &Path, top_level: bool) -> Result<(u64, u64)> {
@@ -786,7 +720,7 @@ fn measure_tree(src: &Path, top_level: bool) -> Result<(u64, u64)> {
 /// Symlinks are skipped with a warning: the game install is not expected
 /// to contain any, and copying them as links risks dangling or
 /// privileged-link errors.
-fn copy_tree(src: &Path, dst: &Path, top_level: bool, progress: &mut CopyProgress) -> Result<usize> {
+fn copy_tree(src: &Path, dst: &Path, top_level: bool, progress: &mut crate::ui::Progress) -> Result<usize> {
     fs::create_dir_all(dst).with_context(|| format!("creating {}", dst.display()))?;
     let mut files = 0usize;
     for entry in fs::read_dir(src).with_context(|| format!("reading {}", src.display()))? {
@@ -939,7 +873,7 @@ mod tests {
         fs::write(src.join("Zomboid/saves/save.sav"), "save")?;
         fs::write(src.join("jre64/bin/java.exe"), "jvm")?;
 
-        let files = copy_tree(&src, &dst, true, &mut CopyProgress::disabled())?;
+        let files = copy_tree(&src, &dst, true, &mut crate::ui::Progress::disabled())?;
         assert_eq!(files, 3, "mods and Zomboid contents must be excluded");
         assert!(dst.join("projectzomboid.jar").is_file());
         assert!(dst.join("media/lua/a.lua").is_file());

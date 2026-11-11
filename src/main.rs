@@ -16,8 +16,8 @@ mod remote;
 mod scanner;
 mod steamcmd;
 mod store;
+mod ui;
 
-use anyhow::Context;
 use clap::{Parser, Subcommand};
 
 #[derive(Parser)]
@@ -97,7 +97,7 @@ enum InstanceCommand {
     New {
         /// Instance name
         name: String,
-        /// Game version to link (default: the currently installed version)
+        /// Game version to link (interactive picker when omitted)
         #[arg(short, long)]
         version: Option<String>,
     },
@@ -166,21 +166,33 @@ fn main() -> anyhow::Result<()> {
         }
         Commands::Instance { command } => match command {
             InstanceCommand::New { name, version } => {
-                let paths = scanner::steam::locate().ok();
+                let game_dir = scanner::steam::locate().ok().and_then(|p| p.game_dir);
+                let store = store::Store::open(game_dir.as_deref())?;
+                let games = store.list_games()?;
                 let version = match version {
-                    Some(v) => v,
+                    Some(version) => version,
                     None => {
-                        let paths = paths
-                            .as_ref()
-                            .context("Steam install not found; pass --version")?;
-                        let info = scanner::game_version::detect(paths)?;
-                        info.version.context(
-                            "could not detect the installed game version; pass --version",
-                        )?
+                        if games.is_empty() {
+                            anyhow::bail!(
+                                "no game versions stored; download one with \
+                                 `snapoid version download` or capture the install with \
+                                 `snapoid version snapshot`"
+                            );
+                        }
+                        let items: Vec<String> = games
+                            .iter()
+                            .map(|game| {
+                                let build = game
+                                    .buildid
+                                    .map(|buildid| format!("  build {buildid}"))
+                                    .unwrap_or_default();
+                                format!("{}{build}", game.version)
+                            })
+                            .collect();
+                        let index = ui::pick(&items, "Pick version", games.len() - 1)?;
+                        games[index].version.clone()
                     }
                 };
-
-                let store = store::Store::open(paths.as_ref().and_then(|p| p.game_dir.as_deref()))?;
                 let instance = store.instance_new(&name, &version)?;
                 println!(
                     "instance {} created (game version {})",
