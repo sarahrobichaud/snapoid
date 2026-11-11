@@ -7,6 +7,7 @@ use std::process::Command;
 use anyhow::{Context as _, Result};
 
 use crate::parser::acf::{self, Acf};
+use crate::platform;
 use crate::pz;
 use crate::warn;
 
@@ -33,10 +34,10 @@ pub fn locate() -> Result<SteamPaths> {
     let zomboid_user_dir = find_zomboid_user_dir();
 
     Ok(SteamPaths {
-        steam_dir,
-        workshop_content,
-        game_dir,
-        zomboid_user_dir,
+        steam_dir: platform::normalize_path(steam_dir),
+        workshop_content: platform::normalize_path(workshop_content),
+        game_dir: game_dir.map(platform::normalize_path),
+        zomboid_user_dir: zomboid_user_dir.map(platform::normalize_path),
     })
 }
 
@@ -196,9 +197,6 @@ mod tests {
         assert_eq!(parse_reg_steam_path("no value here"), None);
     }
 
-    /// Smoke test: when a Steam install is visible, locate() must succeed
-    /// and the workshop content path must target PZ's app ID. Tolerates
-    /// machines without Steam.
     #[test]
     fn locate_smoke() {
         let Ok(paths) = locate() else {

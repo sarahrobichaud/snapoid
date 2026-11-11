@@ -170,12 +170,23 @@ pub fn print_instances(instances: &[GameInstance]) {
     }
 }
 
-/// Render the resolved Steam and Project Zomboid paths.
+/// Render the resolved Steam and Project Zomboid paths, grouped by
+/// category: game first (version, install, user data), then Steam.
 pub fn print_paths(
     paths: &SteamPaths,
     version: &GameVersionInfo,
     steamcmd: Option<&std::path::Path>,
 ) {
+    println!("Game version:     {}", describe_version(version));
+    println!(
+        "Game install:     {}",
+        optional_path(paths.game_dir.as_deref())
+    );
+    println!(
+        "Zomboid user dir: {}",
+        optional_path(paths.zomboid_user_dir.as_deref())
+    );
+    println!();
     println!("Steam root:       {}", paths.steam_dir.display());
     println!(
         "Workshop content: {}{}",
@@ -185,15 +196,6 @@ pub fn print_paths(
         } else {
             " (no content downloaded)"
         }
-    );
-    println!(
-        "Game install:     {}",
-        optional_path(paths.game_dir.as_deref())
-    );
-    println!("Game version:     {}", describe_version(version));
-    println!(
-        "Zomboid user dir: {}",
-        optional_path(paths.zomboid_user_dir.as_deref())
     );
     println!("SteamCMD:         {}", optional_path(steamcmd));
 }

@@ -5,7 +5,7 @@ pub mod link;
 
 pub use link::create_link;
 
-use std::path::{Path, PathBuf};
+use std::path::{MAIN_SEPARATOR_STR, Path, PathBuf};
 
 /// Entries of C:\Users that are not user profiles.
 const NON_PROFILE_USERS: &[&str] = &["public", "default", "default user", "all users"];
@@ -73,6 +73,33 @@ pub fn windows_profile_on(drive: &Path) -> Option<PathBuf> {
         .cloned()
 }
 
+/// Normalize a path to the host platform's canonical form: separators
+/// become the platform-native one and a Windows drive letter is
+/// uppercased. Paths entering from external sources are inconsistent —
+/// registry values use `/` and a lowercase drive (`c:/program files`),
+/// VDF library paths use `\\`, env vars use `\\` — so every path that
+/// crosses such a boundary should pass through here. This is purely
+/// cosmetic on Windows (case-insensitive filesystem); on other platforms
+/// it is the identity.
+pub fn normalize_path(path: PathBuf) -> PathBuf {
+    if !cfg!(windows) {
+        return path;
+    }
+    let text = path.to_string_lossy().replace('/', MAIN_SEPARATOR_STR);
+    let mut chars = text.chars();
+    match (chars.next(), chars.next()) {
+        (Some(drive), Some(':')) if drive.is_ascii_alphabetic() => {
+            // The drive letter is ASCII, so byte-offset slicing is safe.
+            PathBuf::from(format!(
+                "{}{}",
+                drive.to_ascii_uppercase(),
+                &text[drive.len_utf8()..]
+            ))
+        }
+        _ => PathBuf::from(text),
+    }
+}
+
 /// Convert a path to its Windows form via wslpath; None when unavailable.
 #[cfg(unix)]
 pub fn wslpath(path: &Path) -> Option<String> {
@@ -108,6 +135,33 @@ mod tests {
         assert_eq!(wsl_drive_root(Path::new("/mnt/cdrom/game")), None);
         assert_eq!(wsl_drive_root(Path::new("/mnt")), None);
         assert_eq!(wsl_drive_root(Path::new("relative/path")), None);
+    }
+
+    #[test]
+    fn normalizes_paths_to_platform_native_form() {
+        let mixed = PathBuf::from("c:/program files (x86)/steam").join("steamapps/common");
+        let normalized = normalize_path(mixed);
+        if cfg!(windows) {
+            assert_eq!(
+                normalized,
+                PathBuf::from(r"C:\program files (x86)\steam\steamapps\common")
+            );
+            // Already-canonical paths pass through unchanged.
+            assert_eq!(
+                normalize_path(PathBuf::from(r"C:\Users\zyriel\Zomboid")),
+                PathBuf::from(r"C:\Users\zyriel\Zomboid")
+            );
+            // UNC paths have no drive letter to uppercase.
+            assert_eq!(
+                normalize_path(PathBuf::from(r"\\server/share/dir")),
+                PathBuf::from(r"\\server\share\dir")
+            );
+        } else {
+            assert_eq!(
+                normalized,
+                PathBuf::from("c:/program files (x86)/steam/steamapps/common")
+            );
+        }
     }
 
     #[test]

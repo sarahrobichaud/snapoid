@@ -73,7 +73,7 @@ impl SteamCmd for Process {
 pub fn locate() -> Result<PathBuf> {
     if let Some(path) = config::steamcmd_override() {
         if path.is_file() {
-            return Ok(path);
+            return Ok(platform::normalize_path(path));
         }
         anyhow::bail!(
             "SNAPOID_STEAMCMD points to {}, which is not a file",
@@ -124,6 +124,7 @@ pub fn locate() -> Result<PathBuf> {
     candidates
         .into_iter()
         .find(|p| p.is_file())
+        .map(platform::normalize_path)
         .with_context(|| {
             if wsl {
                 "no Windows steamcmd.exe found; install steamcmd on the \
