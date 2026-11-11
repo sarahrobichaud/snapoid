@@ -6,7 +6,7 @@
 
 use std::collections::HashMap;
 
-use anyhow::{bail, ensure, Result};
+use anyhow::{Result, bail, ensure};
 
 #[derive(Debug, Clone)]
 pub enum Acf {
@@ -142,11 +142,7 @@ mod tests {
             Some(r"C:\Program Files\Steam")
         );
         assert_eq!(
-            root.get("child")
-                .unwrap()
-                .get("inner")
-                .unwrap()
-                .as_str(),
+            root.get("child").unwrap().get("inner").unwrap().as_str(),
             Some("value")
         );
     }

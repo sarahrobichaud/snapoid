@@ -32,8 +32,7 @@ fn civil_from_days(days: i64) -> (i64, u32, u32) {
     let year_of_era =
         (day_of_era - day_of_era / 1460 + day_of_era / 36_524 - day_of_era / 146_096) / 365; // [0, 399]
     let year = year_of_era as i64 + era * 400;
-    let day_of_year =
-        day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100); // [0, 365]
+    let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100); // [0, 365]
     let mp = (5 * day_of_year + 2) / 153; // [0, 11]
     let day = (day_of_year - (153 * mp + 2) / 5 + 1) as u32; // [1, 31]
     let month = if mp < 10 { mp + 3 } else { mp - 9 } as u32; // [1, 12]

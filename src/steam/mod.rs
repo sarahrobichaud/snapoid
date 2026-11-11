@@ -1,20 +1,14 @@
-//! Component 2: Steam locator.
-//!
-//! Finds the Steam root, the library holding PZ workshop content, the PZ
-//! game install, and the Zomboid user data dir.
+//! Steam locator: finds the Steam root, the library holding PZ workshop
+//! content, the PZ game install, and the Zomboid user data dir.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use anyhow::{Context, Result};
+use anyhow::{Context as _, Result};
 
 use crate::parser::acf::{self, Acf};
+use crate::pz;
 use crate::warn;
-
-/// Project Zomboid's Steam app ID.
-pub const PZ_APP_ID: u32 = 108600;
-
-const PZ_COMMON_DIR: &str = "ProjectZomboid";
 
 #[derive(Debug)]
 pub struct SteamPaths {
@@ -48,8 +42,8 @@ pub fn locate() -> Result<SteamPaths> {
 
 /// Find the Steam root. Checks, in order: the Windows registry (via
 /// reg.exe, which also works under WSL interop), %ProgramFiles(x86)%\Steam,
-/// the usual Linux/macOS locations, and /mnt/c for WSL installs. The first
-/// candidate containing a steamapps/ directory wins. Under WSL the
+/// the usual Linux/macOS locations, and /mnt/c for WSL installs. The
+/// first candidate containing a steamapps/ directory wins. Under WSL the
 /// registry's drive-letter path is not directly readable, so the /mnt/c
 /// fallback takes over there.
 fn find_steam_dir() -> Result<PathBuf> {
@@ -78,9 +72,9 @@ fn find_steam_dir() -> Result<PathBuf> {
 }
 
 /// Read SteamPath from the Windows registry by shelling out to reg.exe
-/// instead of using a Windows-only crate, so the whole crate compiles (and
-/// is analyzed by rust-analyzer) identically on every platform. On
-/// non-Windows hosts reg does not exist and this returns None.
+/// instead of using a Windows-only crate, so the whole crate compiles
+/// identically on every platform. On non-Windows hosts reg does not
+/// exist and this returns None.
 fn steam_dir_from_registry() -> Option<PathBuf> {
     let output = Command::new("reg")
         .args(["query", r"HKCU\Software\Valve\Steam", "/v", "SteamPath"])
@@ -92,9 +86,9 @@ fn steam_dir_from_registry() -> Option<PathBuf> {
     parse_reg_steam_path(&String::from_utf8_lossy(&output.stdout))
 }
 
-/// Parse `reg query` output. Values are tab-separated but paths may contain
-/// spaces, so anchor on the REG_SZ type marker rather than splitting on
-/// whitespace.
+/// Parse `reg query` output. Values are tab-separated but paths may
+/// contain spaces, so anchor on the REG_SZ type marker rather than
+/// splitting on whitespace.
 fn parse_reg_steam_path(stdout: &str) -> Option<PathBuf> {
     for line in stdout.lines() {
         if !line.contains("SteamPath") {
@@ -152,10 +146,10 @@ fn find_libraries(steam_dir: &Path) -> Result<Vec<PathBuf>> {
 /// library that actually has content for PZ, else default to the Steam
 /// root's path (nothing downloaded yet).
 fn find_workshop_content(steam_dir: &Path, libraries: &[PathBuf]) -> PathBuf {
-    let default = steam_dir.join(format!("steamapps/workshop/content/{PZ_APP_ID}"));
+    let default = steam_dir.join(format!("steamapps/workshop/content/{}", pz::APP_ID));
     libraries
         .iter()
-        .map(|lib| lib.join(format!("steamapps/workshop/content/{PZ_APP_ID}")))
+        .map(|lib| lib.join(format!("steamapps/workshop/content/{}", pz::APP_ID)))
         .find(|p| p.is_dir())
         .unwrap_or(default)
 }
@@ -163,25 +157,8 @@ fn find_workshop_content(steam_dir: &Path, libraries: &[PathBuf]) -> PathBuf {
 fn find_game_dir(libraries: &[PathBuf]) -> Option<PathBuf> {
     libraries
         .iter()
-        .map(|lib| lib.join("steamapps/common").join(PZ_COMMON_DIR))
+        .map(|lib| lib.join("steamapps/common").join(pz::COMMON_DIR))
         .find(|p| p.is_dir())
-}
-
-/// Buildid of the installed app, read from the appmanifest in the
-/// library holding `game_dir` (.../steamapps/common/<name>). None when
-/// the manifest is missing or unparsable.
-pub fn installed_buildid(game_dir: &Path, app_id: u32) -> Option<u64> {
-    let text = std::fs::read_to_string(
-        game_dir
-            .parent()?
-            .parent()?
-            .join(format!("appmanifest_{app_id}.acf")),
-    )
-    .ok()?;
-    let Acf::Map(map) = acf::parse(&text).ok()? else {
-        return None;
-    };
-    map.get("buildid")?.as_str()?.parse().ok()
 }
 
 /// The Zomboid user data dir sits next to the user's profile
@@ -228,10 +205,11 @@ mod tests {
             eprintln!("no Steam install visible; skipping");
             return;
         };
-        eprintln!("{paths:#?}");
-        assert!(paths
-            .workshop_content
-            .to_string_lossy()
-            .ends_with(&format!("steamapps/workshop/content/{PZ_APP_ID}")));
+        assert!(
+            paths
+                .workshop_content
+                .to_string_lossy()
+                .ends_with(&format!("steamapps/workshop/content/{}", pz::APP_ID))
+        );
     }
 }

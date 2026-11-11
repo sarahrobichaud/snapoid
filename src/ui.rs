@@ -1,8 +1,6 @@
-//! Component 12: Terminal UI helpers.
-//!
-//! Interactive-console pieces shared by the CLI, built on the `dialoguer`
-//! and `indicatif` crates: a menu picker for choosing from a list, and a
-//! progress bar for long copy operations.
+//! Terminal UI: interactive picker and the progress-bar adapter for
+//! [`snapoid::fsops::Progress`]. Built on the `dialoguer` and `indicatif`
+//! crates.
 
 use std::io::IsTerminal;
 
@@ -10,11 +8,13 @@ use anyhow::Result;
 use dialoguer::Select;
 use indicatif::{ProgressBar, ProgressStyle};
 
+use snapoid::fsops;
+
 /// Print `items` as an interactive menu and read a choice from the
 /// terminal.
 ///
 /// Returns the 0-based index. `default` is the pre-selected entry, so
-/// pressing Enter picks it (callers pass the newest item). When stderr
+/// pressing Enter picks it (callers pass the newest item). When stdin
 /// is not an interactive terminal, an error is returned instead —
 /// scripts should pass explicit values rather than answer menus.
 pub fn pick(items: &[String], prompt: &str, default: usize) -> Result<usize> {
@@ -54,34 +54,33 @@ impl Progress {
         );
         Self { bar, files: 0 }
     }
+}
 
-    /// A bar that renders nothing (for tests and internal moves).
-    pub fn disabled() -> Self {
-        Self {
-            bar: ProgressBar::hidden(),
-            files: 0,
-        }
-    }
-
-    pub fn step(&mut self, bytes: u64) {
+impl fsops::Progress for Progress {
+    fn step(&mut self, bytes: u64) {
         self.files += 1;
         self.bar.inc(bytes);
         self.bar.set_message(format!("{} files", self.files));
     }
 
-    /// Complete the bar and clear it from the terminal.
-    pub fn finish(&mut self) {
+    fn finish(&mut self) {
         self.bar.finish_and_clear();
     }
+}
+
+/// Progress factory for store operations: a real terminal bar.
+pub fn progress_factory(total_bytes: u64) -> Box<dyn fsops::Progress> {
+    Box::new(Progress::new(total_bytes))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use snapoid::fsops::Progress as _;
 
     #[test]
     fn hidden_progress_is_silent() {
-        let mut progress = Progress::disabled();
+        let mut progress = Progress::new(0);
         progress.step(100);
         progress.finish();
     }

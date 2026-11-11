@@ -1,26 +1,67 @@
-//! Component 8: SteamCMD runner.
-//!
-//! Locates the steamcmd executable and runs it as a child process. This is
-//! the plumbing layer only: callers assemble the steamcmd command line
-//! (`+force_install_dir`, `+login`, `+app_update`, `download_depot`, ...).
+//! SteamCMD runner: locates the executable and runs it as a child
+//! process. This is the plumbing layer only; callers assemble the
+//! steamcmd command line (`+force_install_dir`, `+login`, `+app_update`,
+//! `download_depot`, ...).
 //!
 //! SteamCMD's exit codes are unreliable — it often exits 0 even when the
-//! requested operation failed — so callers that must verify success should
-//! use [`capture`] and check [`reports_success`] instead of trusting the
-//! process status.
+//! requested operation failed — so callers that must verify success
+//! should use [`capture`] and check [`reports_success`] instead of
+//! trusting the process status.
 //!
 //! Under WSL the located binary is always the Windows steamcmd.exe: the
 //! Linux steamcmd would download Linux depots into the WSL filesystem,
-//! while the game files must be Windows builds on a Windows drive. Callers
-//! must therefore pass Windows-style paths for arguments like
-//! `+force_install_dir` (see `store::wslpath`).
+//! while the game files must be Windows builds on a Windows drive.
+//! Callers must therefore pass Windows-style paths for arguments like
+//! `+force_install_dir` (see [`crate::platform::wslpath`]).
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
-use anyhow::{Context, Result};
+use anyhow::{Context as _, Result};
 
+use crate::config;
 use crate::debug;
+use crate::platform;
+
+/// A steamcmd executable that can be run or captured. The seam for
+/// faking steamcmd in tests.
+pub trait SteamCmd {
+    /// Run with inherited stdio so the user sees SteamCMD's own progress
+    /// output (download percentages, update logs) live.
+    fn run(&self, args: &[String]) -> Result<()>;
+    /// Run capturing all output as a single string for parsing
+    /// (`app_info_print`, manifest listings, ...). stdin is closed so an
+    /// interactive prompt cannot hang the call.
+    fn capture(&self, args: &[String]) -> Result<String>;
+    /// The directory containing the executable; `download_depot` drops
+    /// results under it.
+    fn program_dir(&self) -> Option<PathBuf>;
+}
+
+/// The real steamcmd process.
+pub struct Process {
+    program: PathBuf,
+}
+
+impl Process {
+    pub fn new(program: PathBuf) -> Self {
+        Self { program }
+    }
+}
+
+impl SteamCmd for Process {
+    fn run(&self, args: &[String]) -> Result<()> {
+        run(&self.program, args)
+    }
+
+    fn capture(&self, args: &[String]) -> Result<String> {
+        capture(&self.program, args)
+    }
+
+    fn program_dir(&self) -> Option<PathBuf> {
+        self.program.parent().map(Path::to_path_buf)
+    }
+}
 
 /// Locate the steamcmd executable.
 ///
@@ -30,8 +71,7 @@ use crate::debug;
 /// locations. Under WSL only the Windows `steamcmd.exe` is considered;
 /// elsewhere the platform's native binary name applies.
 pub fn locate() -> Result<PathBuf> {
-    if let Some(path) = std::env::var_os("SNAPOID_STEAMCMD") {
-        let path = PathBuf::from(path);
+    if let Some(path) = config::steamcmd_override() {
         if path.is_file() {
             return Ok(path);
         }
@@ -41,10 +81,10 @@ pub fn locate() -> Result<PathBuf> {
         );
     }
 
-    let wsl = crate::store::is_wsl();
+    let wsl = platform::is_wsl();
     let mut candidates: Vec<PathBuf> = Vec::new();
 
-    if let Ok(steam_dir) = crate::scanner::steam::locate() {
+    if let Ok(steam_dir) = crate::steam::locate() {
         candidates.push(steam_dir.steam_dir.join("steamcmd.exe"));
     }
 
@@ -94,9 +134,7 @@ pub fn locate() -> Result<PathBuf> {
         })
 }
 
-/// Run steamcmd with `args`, inheriting stdio so the user sees SteamCMD's
-/// own progress output (download percentages, update logs) live.
-pub fn run(program: &Path, args: &[String]) -> Result<()> {
+fn run(program: &Path, args: &[String]) -> Result<()> {
     debug!("steamcmd: {} {}", program.display(), args.join(" "));
     let status = command(program)
         .args(args)
@@ -108,11 +146,12 @@ pub fn run(program: &Path, args: &[String]) -> Result<()> {
     Ok(())
 }
 
-/// Run steamcmd with `args`, capturing all output as a single string for
-/// parsing (`app_info_print`, manifest listings, ...). stdin is closed so
-/// an interactive prompt cannot hang the call.
-pub fn capture(program: &Path, args: &[String]) -> Result<String> {
-    debug!("steamcmd (captured): {} {}", program.display(), args.join(" "));
+fn capture(program: &Path, args: &[String]) -> Result<String> {
+    debug!(
+        "steamcmd (captured): {} {}",
+        program.display(),
+        args.join(" ")
+    );
     let output = command(program)
         .args(args)
         .stdin(Stdio::null())
@@ -129,14 +168,13 @@ pub fn capture(program: &Path, args: &[String]) -> Result<String> {
 /// the binary's own directory is always a Windows-side path.
 fn command(program: &Path) -> Command {
     let mut cmd = Command::new(program);
-    if crate::store::is_wsl()
+    if platform::is_wsl()
         && program
             .extension()
             .is_some_and(|ext| ext.eq_ignore_ascii_case("exe"))
+        && let Some(dir) = program.parent()
     {
-        if let Some(dir) = program.parent() {
-            cmd.current_dir(dir);
-        }
+        cmd.current_dir(dir);
     }
     cmd
 }
@@ -170,7 +208,9 @@ mod tests {
 
     #[test]
     fn parses_success_and_error_lines() {
-        assert!(reports_success("... Success! App '380870' fully installed."));
+        assert!(reports_success(
+            "... Success! App '380870' fully installed."
+        ));
         assert!(!reports_success("Error! Downloading depot manifest failed"));
         // The last verdict wins: a self-update success followed by a
         // failed app_update must count as a failure.
@@ -187,7 +227,6 @@ mod tests {
             eprintln!("no steamcmd install visible; skipping");
             return;
         };
-        eprintln!("{}", program.display());
         assert!(program.is_file());
     }
 }

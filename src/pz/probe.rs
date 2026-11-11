@@ -1,31 +1,31 @@
-//! Game version detection for Project Zomboid.
+//! Game version detection.
 //!
-//! The bundled headless dedicated server prints
-//! `version=<full> <revision>` to stdout within the first moments of
-//! startup, before mod loading; spawning it and killing it as soon as the
-//! line appears takes well under a second and yields the full version
-//! without a client launch.
+//! The bundled headless dedicated server prints `version=<full>
+//! <revision>` to stdout within the first moments of startup, before mod
+//! loading; spawning it and killing it as soon as the line appears takes
+//! well under a second and yields the full version without a client
+//! launch.
 
 use std::io::{BufRead, BufReader, Read};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
-use anyhow::{Context, Result};
+use anyhow::{Context as _, Result};
 
-use crate::scanner::steam::SteamPaths;
 use crate::{debug, warn};
 
 const PROBE_TIMEOUT: Duration = Duration::from_secs(90);
 
-/// Where the reported version string came from.
+/// Where a reported version string came from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum VersionSource {
     /// Headless dedicated-server probe; full version.
     Probe,
 }
 
+/// The detected game version of a game directory.
 #[derive(Debug, Clone, Default)]
 pub struct GameVersionInfo {
     /// Best known version string, e.g. "42.22.2".
@@ -35,51 +35,56 @@ pub struct GameVersionInfo {
     pub source: Option<VersionSource>,
 }
 
-/// Detect the game version by briefly spawning the bundled headless
-/// server, which prints its full version (including the hotfix digit)
-/// during startup.
-pub fn detect(paths: &SteamPaths) -> Result<GameVersionInfo> {
-    match paths.game_dir.as_deref() {
-        Some(game_dir) => detect_dir(game_dir),
-        None => {
-            warn!("no game install found");
-            Ok(GameVersionInfo::default())
+/// Strategy for detecting the version of a game directory. The default
+/// probes the bundled headless server (Windows layout); other platform
+/// layouts can supply their own.
+pub trait VersionProbe {
+    fn probe(&self, game_dir: &Path) -> Result<GameVersionInfo>;
+}
+
+/// Detect the version of a game directory with the default probe.
+pub fn detect_dir(game_dir: &Path) -> Result<GameVersionInfo> {
+    HeadlessServerProbe.probe(game_dir)
+}
+
+/// The default probe: briefly spawns the bundled headless server, which
+/// prints its full version (including the hotfix digit) during startup.
+pub struct HeadlessServerProbe;
+
+impl VersionProbe for HeadlessServerProbe {
+    fn probe(&self, game_dir: &Path) -> Result<GameVersionInfo> {
+        let java = java_path(game_dir);
+        if !java.is_file() {
+            anyhow::bail!(
+                "{} not found; not a Project Zomboid game directory",
+                java.display()
+            );
         }
+
+        let mut info = GameVersionInfo::default();
+        match probe_server(game_dir) {
+            Ok(Some((version, revision))) => {
+                info.version = Some(version);
+                info.revision = Some(revision);
+                info.source = Some(VersionSource::Probe);
+            }
+            Ok(None) => {
+                warn!("server probe did not report a version");
+            }
+            Err(error) => {
+                warn!("server probe failed: {error:#}");
+            }
+        }
+        Ok(info)
     }
 }
 
-/// Detect the game version in an explicit game directory (e.g. a
-/// downloaded build), independent of the located Steam install.
-pub fn detect_dir(game_dir: &Path) -> Result<GameVersionInfo> {
-    let mut info = GameVersionInfo::default();
-
-    let java = game_dir.join("jre64/bin/java.exe");
-    if !java.is_file() {
-        anyhow::bail!(
-            "{} not found; not a Project Zomboid game directory",
-            java.display()
-        );
-    }
-
-    match probe_server(game_dir) {
-        Ok(Some((version, revision))) => {
-            info.version = Some(version);
-            info.revision = Some(revision);
-            info.source = Some(VersionSource::Probe);
-        }
-        Ok(None) => {
-            warn!("server probe did not report a version");
-        }
-        Err(error) => {
-            warn!("server probe failed: {error:#}");
-        }
-    }
-
-    Ok(info)
+fn java_path(game_dir: &Path) -> PathBuf {
+    game_dir.join("jre64/bin/java.exe")
 }
 
 fn probe_server(game_dir: &Path) -> Result<Option<(String, String)>> {
-    let java = game_dir.join("jre64/bin/java.exe");
+    let java = java_path(game_dir);
     debug!("probe: spawning headless server");
     let mut child = Command::new(&java)
         .args([
@@ -110,9 +115,9 @@ fn probe_server(game_dir: &Path) -> Result<Option<(String, String)>> {
     let stdout = child.stdout.take().context("no piped stdout")?;
     let stderr = child.stderr.take().context("no piped stderr")?;
     let (tx, rx) = mpsc::channel();
-    let tx_err = tx.clone();
-    let out_reader = std::thread::spawn(move || watch(stdout, tx));
-    let err_reader = std::thread::spawn(move || watch(stderr, tx_err));
+    let out_tx = tx.clone();
+    let out_reader = std::thread::spawn(move || watch(stdout, out_tx));
+    let err_reader = std::thread::spawn(move || watch(stderr, tx));
 
     fn watch(stream: impl Read, sender: mpsc::Sender<String>) {
         for line in BufReader::new(stream).lines().map_while(Result::ok) {
@@ -206,17 +211,20 @@ mod tests {
     /// Tolerant smoke test against a real install.
     #[test]
     fn detect_smoke() {
-        let Ok(paths) = crate::scanner::steam::locate() else {
+        let Ok(paths) = crate::steam::locate() else {
             eprintln!("no Steam install visible; skipping");
             return;
         };
-        if paths.game_dir.is_none() {
+        let Some(game_dir) = paths.game_dir else {
             eprintln!("no game install visible; skipping");
             return;
-        }
-        let info = detect(&paths).unwrap();
+        };
+        let info = detect_dir(&game_dir).unwrap();
         eprintln!("{info:?}");
-        assert!(info.revision.is_some(), "version revision should be detected");
+        assert!(
+            info.revision.is_some(),
+            "version revision should be detected"
+        );
         assert!(info.version.is_some(), "version string should be detected");
     }
 }

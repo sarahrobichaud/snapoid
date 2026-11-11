@@ -1,11 +1,6 @@
-//! Component 9: Version registry.
-//!
-//! Maps game versions to depot manifest IDs. The authoritative source is
-//! a registry file fetched from GitHub on every load, so new builds can be
-//! added without releasing a new tool version. When offline, loading
-//! fails.
-//!
-//! The registry file is JSON:
+//! Version registry: maps game versions to depot manifest IDs. The
+//! authoritative source is a registry file fetched from GitHub on every
+//! load, so new builds can be added without releasing a new tool version.
 //!
 //! ```json
 //! { "builds": [ { "version": "42.22.2", "manifest": 2378094061158458897 } ] }
@@ -13,15 +8,11 @@
 
 use std::time::Duration;
 
-use anyhow::{Context, Result};
+use anyhow::{Context as _, Result};
 use serde::{Deserialize, Serialize};
 
-use crate::debug;
-
-/// Where the registry file is fetched from; override with the
-/// SNAPOID_REGISTRY_URL environment variable.
-const DEFAULT_REGISTRY_URL: &str =
-    "https://raw.githubusercontent.com/sarahrobichaud/snapoid/main/registry.json";
+use crate::config;
+use crate::fsops::unix_now;
 
 const FETCH_TIMEOUT: Duration = Duration::from_secs(30);
 
@@ -33,8 +24,7 @@ pub struct Entry {
     pub manifest: u64,
     /// Depot ID for `download_depot`, when known.
     pub depot: Option<u64>,
-    /// Steam build ID of the build, when known (SteamDB lookup). Lets a
-    /// pinned download satisfy the `latest` buildid check.
+    /// Steam build ID of the build, when known.
     pub buildid: Option<u64>,
 }
 
@@ -55,32 +45,20 @@ impl Registry {
 
 /// Load the registry from GitHub.
 pub fn load() -> Result<Registry> {
-    let url = registry_url();
+    let url = cache_bust(&config::registry_url());
     Ok(Registry {
         entries: fetch(&url)?,
     })
 }
 
-fn registry_url() -> String {
-    let url = std::env::var("SNAPOID_REGISTRY_URL")
-        .unwrap_or_else(|_| DEFAULT_REGISTRY_URL.to_owned());
-    // raw.githubusercontent.com serves through a CDN that keys on the
-    // full URL and caches for minutes; a one-minute-bucketed query
-    // parameter makes a freshly pushed registry visible quickly without
-    // fetching from origin on every request.
+/// raw.githubusercontent.com serves through a CDN keyed on the URL; a
+/// one-minute-bucketed query parameter forces a fresh fetch.
+fn cache_bust(url: &str) -> String {
     let separator = if url.contains('?') { '&' } else { '?' };
     format!("{url}{separator}t={}", unix_now() / 60)
 }
 
-fn unix_now() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|since| since.as_secs())
-        .unwrap_or(0)
-}
-
 fn fetch(url: &str) -> Result<Vec<Entry>> {
-    debug!("registry: fetching {url}");
     let agent = ureq::Agent::config_builder()
         .timeout_global(Some(FETCH_TIMEOUT))
         .build()
@@ -169,5 +147,13 @@ mod tests {
     fn rejects_malformed_registry_file() {
         assert!(parse("not json").is_err());
         assert!(parse(r#"{ "builds": [{ "version": "1.0" }] }"#).is_err());
+    }
+
+    #[test]
+    fn cache_busts_the_url() {
+        let busted = cache_bust("https://example.com/registry.json");
+        assert!(busted.starts_with("https://example.com/registry.json?t="));
+        let busted = cache_bust("https://example.com/registry.json?x=1");
+        assert!(busted.contains("&t="));
     }
 }
