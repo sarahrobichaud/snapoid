@@ -49,14 +49,14 @@ pub struct ModEntry {
     /// Highest `versionMax` across all manifests; None = unbounded.
     #[serde(default)]
     pub version_max: Option<String>,
-    /// Version range inferred from the version-folder names, captured
-    /// always but shown only when the manifests declare nothing. A
-    /// packaging hint, not a compatibility claim — folder names lie
+    /// Version lower bound inferred from the version-folder names,
+    /// captured always but shown only when the manifests declare
+    /// nothing. Set only when there is no `common/` manifest — with
+    /// one, the game loads the mod on any B42 version via the fallback.
+    /// A packaging hint, not a compatibility claim — folder names lie
     /// (docs/research/pz-modding.md §5.3).
     #[serde(default)]
     pub inferred_min: Option<String>,
-    #[serde(default)]
-    pub inferred_max: Option<String>,
     /// `require=` Mod IDs, unioned across manifests.
     #[serde(default)]
     pub requires: Vec<String>,
@@ -151,18 +151,20 @@ fn inspect_mod(name: &str, dir: &Path) -> Option<ModEntry> {
         .filter_map(|i| i.version_max.as_ref())
         .collect();
 
-    // Version range inferred from the version-folder names, using the
-    // game's own name→version mapping. Folders below the game's 42.0
-    // floor are never selected by the B42 loader, so they do not bound
-    // the hint.
-    let packaged: Vec<&str> = versions
-        .iter()
-        .filter(|(key, _, _)| *key >= floor)
-        .map(|(_, folder, _)| folder.as_str())
-        .collect();
-    let (inferred_min, inferred_max) = match (packaged.first(), packaged.last()) {
-        (Some(min), Some(max)) => (Some((*min).to_owned()), Some((*max).to_owned())),
-        _ => (None, None),
+    // Version lower bound inferred from the version-folder names,
+    // using the game's own name→version mapping. The folder set bounds
+    // compatibility only from below: the game loads the lowest folder
+    // ≤ the running version, so every build ≥ the lowest folder finds
+    // one, and a `common/` manifest covers the builds below it via the
+    // fallback. Folders below the game's 42.0 floor are never
+    // selected, so they bound nothing.
+    let inferred_min = if common.is_none() {
+        versions
+            .iter()
+            .find(|(key, _, _)| *key >= floor)
+            .map(|(_, folder, _)| folder.clone())
+    } else {
+        None
     };
 
     Some(ModEntry {
@@ -173,7 +175,6 @@ fn inspect_mod(name: &str, dir: &Path) -> Option<ModEntry> {
         version_min: mins.iter().min().map(|v| v.text().to_owned()),
         version_max: maxs.iter().max().map(|v| v.text().to_owned()),
         inferred_min,
-        inferred_max,
         requires: union(infos.iter().map(|i| &i.requires)),
         incompatible: union(infos.iter().map(|i| &i.incompatible)),
         load_before: union(infos.iter().map(|i| &i.load_before)),
@@ -323,11 +324,11 @@ mod tests {
     }
 
     #[test]
-    fn infers_range_from_folder_names_when_manifests_are_silent() {
+    fn infers_lower_bound_from_folder_names_when_manifests_are_silent() {
         let base = std::env::temp_dir().join(format!("snapoid-item-inf-{}", std::process::id()));
         let item = base.join("item");
         // Folders below the game's 42.0 floor (B41-era packaging) do
-        // not bound the hint; names are kept as written.
+        // not bound the hint; the name is kept as written.
         write(&item, "mods/M/41/mod.info", "name=M\nid=M\n");
         write(&item, "mods/M/42.16/mod.info", "name=M\nid=M\n");
         write(&item, "mods/M/42.22/mod.info", "name=M\nid=M\n");
@@ -335,15 +336,17 @@ mod tests {
         let mods = inspect_item(&item);
         assert_eq!(mods[0].version_min, None);
         assert_eq!(mods[0].version_max, None);
+        // A lower bound only: the game loads the lowest folder ≤ the
+        // running version, so nothing here caps the mod from above.
         assert_eq!(mods[0].inferred_min.as_deref(), Some("42.16"));
-        assert_eq!(mods[0].inferred_max.as_deref(), Some("42.22"));
 
-        // A single folder bounds both ends with its own name.
-        let item = base.join("single");
-        write(&item, "mods/S/42.5/mod.info", "name=S\nid=S\n");
+        // A `common/` manifest is the game's fallback for builds below
+        // every folder, so the folders bound nothing at all.
+        let item = base.join("with-common");
+        write(&item, "mods/C/42.16/mod.info", "name=C\nid=C\n");
+        write(&item, "mods/C/common/mod.info", "name=C\nid=C\n");
         let mods = inspect_item(&item);
-        assert_eq!(mods[0].inferred_min.as_deref(), Some("42.5"));
-        assert_eq!(mods[0].inferred_max.as_deref(), Some("42.5"));
+        assert_eq!(mods[0].inferred_min, None);
 
         // Declared fields are captured independently of the hint.
         let item = base.join("declared");
@@ -361,7 +364,6 @@ mod tests {
         write(&item, "mods/O/mod.info", "name=O\nid=O\n");
         let mods = inspect_item(&item);
         assert_eq!(mods[0].inferred_min, None);
-        assert_eq!(mods[0].inferred_max, None);
 
         fs::remove_dir_all(&base).unwrap();
     }

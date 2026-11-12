@@ -122,7 +122,6 @@ mod tests {
                 version_min: Some("42.16".to_owned()),
                 version_max: None,
                 inferred_min: Some("42.16".to_owned()),
-                inferred_max: Some("42.22".to_owned()),
                 requires: vec!["Lib".to_owned()],
                 incompatible: Vec::new(),
                 load_before: Vec::new(),
@@ -140,7 +139,6 @@ mod tests {
         assert_eq!(parsed.mods[0].mod_id.as_deref(), Some("TM"));
         assert_eq!(parsed.mods[0].requires, vec!["Lib"]);
         assert_eq!(parsed.mods[0].inferred_min.as_deref(), Some("42.16"));
-        assert_eq!(parsed.mods[0].inferred_max.as_deref(), Some("42.22"));
         assert_eq!(parsed.mods[0].layout, Layout::B42);
         assert_eq!(parsed.layout, Some(Layout::B42));
     }

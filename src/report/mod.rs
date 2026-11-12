@@ -1,6 +1,8 @@
 //! Human-readable rendering of library results. No orchestration, no
 //! library imports beyond data types.
 
+use std::cmp::Ordering;
+
 use snapoid::download::Downloaded;
 use snapoid::fmt;
 use snapoid::pz::item::Layout;
@@ -12,11 +14,11 @@ use snapoid::steam::SteamPaths;
 use snapoid::store::{GameInstance, Source, StoredGame, StoredMod};
 
 /// Render the workshop inventory from `scan`: per item, one row per
-/// bundled mod with its layout, Mod ID, version range, and declared
-/// dependencies.
+/// bundled mod with its layout, Mod ID, declared version range, and
+/// declared dependencies. External sources show declared constraints
+/// only — folder-name hints are a store-listing concern.
 pub fn print_scan(items: &[WorkshopItem]) {
     let mut tally = LayoutTally::default();
-    let mut inferred = 0;
     for item in items {
         println!(
             "\n{}  updated {}  {} mod{}",
@@ -31,10 +33,67 @@ pub fn print_scan(items: &[WorkshopItem]) {
         }
         for m in &item.mods {
             tally.add(m.layout);
-            if is_inferred(m) {
-                inferred += 1;
+            println!(
+                "{}",
+                mod_row(m, name_width, id_width, &declared_range(m))
+            );
+        }
+    }
+
+    println!(
+        "\n{} workshop item{}, {} mod{} — {}",
+        items.len(),
+        plural(items.len()),
+        tally.total(),
+        plural(tally.total()),
+        tally.breakdown()
+    );
+}
+
+/// Render the stored workshop items grouped by author: the `author=`
+/// each bundled mod declares in its mod.info. An item lands in the
+/// group of its first mod's author (mods are name-sorted, so the
+/// choice is deterministic); items whose manifests declare none share
+/// the unknown group, printed last.
+pub fn print_stored_mods(items: &[StoredMod]) {
+    let mut tally = LayoutTally::default();
+    let mut inferred = 0;
+    for (author, group) in group_by_author(items) {
+        println!("\n{}", author.unwrap_or("(unknown author)"));
+        for item in group {
+            let mut header = format!(
+                "  {}  updated {}",
+                item.id,
+                updated_text(item.time_updated)
+            );
+            if let Some(title) = &item.title {
+                header.push_str(&format!("  {title}"));
             }
-            println!("{}", mod_row(m, name_width, id_width));
+            if let Some(source) = item.source {
+                header.push_str(&format!("  ({})", source_text(source)));
+            }
+            header.push_str(&format!(
+                "  {} mod{}",
+                item.mods.len(),
+                plural(item.mods.len())
+            ));
+            println!("{header}");
+
+            let (name_width, id_width) = row_widths(&item.mods);
+            if item.mods.is_empty() {
+                // Old sidecars predate the captured metadata.
+                println!("    (no mods recorded)");
+            }
+            for m in &item.mods {
+                tally.add(m.layout);
+                if is_inferred(m) {
+                    inferred += 1;
+                }
+                println!(
+                    "  {}",
+                    mod_row(m, name_width, id_width, &version_range(m))
+                );
+            }
         }
     }
 
@@ -49,53 +108,26 @@ pub fn print_scan(items: &[WorkshopItem]) {
     );
 }
 
-/// Render the stored workshop items: what the library holds, from the
-/// metadata captured at save time — no disk walks.
-pub fn print_stored_mods(items: &[StoredMod]) {
-    let mut tally = LayoutTally::default();
-    let mut inferred = 0;
+/// Group stored items by the author their first bundled mod declares,
+/// sorted case-insensitively with the unknown group last. Items keep
+/// their id order within a group.
+fn group_by_author(items: &[StoredMod]) -> Vec<(Option<&str>, Vec<&StoredMod>)> {
+    let mut groups: Vec<(Option<&str>, Vec<&StoredMod>)> = Vec::new();
     for item in items {
-        let mut header = format!(
-            "\n{}  updated {}",
-            item.id,
-            updated_text(item.time_updated)
-        );
-        if let Some(title) = &item.title {
-            header.push_str(&format!("  {title}"));
-        }
-        if let Some(source) = item.source {
-            header.push_str(&format!("  ({})", source_text(source)));
-        }
-        header.push_str(&format!(
-            "  {} mod{}",
-            item.mods.len(),
-            plural(item.mods.len())
-        ));
-        println!("{header}");
-
-        let (name_width, id_width) = row_widths(&item.mods);
-        if item.mods.is_empty() {
-            // Old sidecars predate the captured metadata.
-            println!("  (no mods recorded)");
-        }
-        for m in &item.mods {
-            tally.add(m.layout);
-            if is_inferred(m) {
-                inferred += 1;
-            }
-            println!("{}", mod_row(m, name_width, id_width));
+        let author = item.mods.first().and_then(|m| m.author.as_deref());
+        if let Some((_, group)) = groups.iter_mut().find(|(key, _)| *key == author) {
+            group.push(item);
+        } else {
+            groups.push((author, vec![item]));
         }
     }
-
-    println!(
-        "\n{} workshop item{}, {} mod{} — {}{}",
-        items.len(),
-        plural(items.len()),
-        tally.total(),
-        plural(tally.total()),
-        tally.breakdown(),
-        inferred_legend(inferred)
-    );
+    groups.sort_by(|(a, _), (b, _)| match (a, b) {
+        (Some(a), Some(b)) => a.to_lowercase().cmp(&b.to_lowercase()),
+        (Some(_), None) => Ordering::Less,
+        (None, Some(_)) => Ordering::Greater,
+        (None, None) => Ordering::Equal,
+    });
+    groups
 }
 
 /// The update timestamp of an item, as displayed.
@@ -140,14 +172,15 @@ fn row_widths(mods: &[ModEntry]) -> (usize, usize) {
 }
 
 /// One row per bundled mod: name, layout, Mod ID, version range, and
-/// declared dependencies.
-fn mod_row(mod_entry: &ModEntry, name_width: usize, id_width: usize) -> String {
+/// declared dependencies. The range is computed by the caller — the
+/// tiering differs between external sources and the store.
+fn mod_row(mod_entry: &ModEntry, name_width: usize, id_width: usize, range: &str) -> String {
     let mut row = format!(
         "  {:name_width$}  {:<6}  {:id_width$}  {}",
         mod_entry.name,
         layout_tag(mod_entry.layout),
         mod_id_text(mod_entry),
-        version_range(mod_entry)
+        range
     );
     let dependencies = dependency_text(mod_entry);
     if !dependencies.is_empty() {
@@ -241,11 +274,10 @@ impl LayoutTally {
     }
 }
 
-/// The supported version range of a mod, as displayed. Unbounded ends
-/// are shown as unknown, not as compatible. Declared constraints win;
-/// when the manifests declare nothing, the folder-name hint is shown
-/// prefixed with ~ — a tier below a declared constraint.
-fn version_range(mod_entry: &ModEntry) -> String {
+/// The declared version range of a mod, as displayed. Unbounded ends
+/// are shown as unknown, not as compatible. This is the only range an
+/// external source (workshop) listing shows.
+fn declared_range(mod_entry: &ModEntry) -> String {
     let min = mod_entry.version_min.as_deref();
     let max = mod_entry.version_max.as_deref();
     match (min, max) {
@@ -253,21 +285,28 @@ fn version_range(mod_entry: &ModEntry) -> String {
         (Some(min), Some(max)) => format!("{min} - {max}"),
         (Some(min), None) => format!("{min}+"),
         (None, Some(max)) => format!("- {max}"),
-        (None, None) => inferred_range(mod_entry),
+        (None, None) => "-".to_owned(),
     }
 }
 
-/// The folder-name hint as a range. Inference yields both ends or
-/// neither — both come from the same folder set.
+/// The version range of a stored mod, as displayed: the declared
+/// constraint when the manifests declare one, otherwise the folder-name
+/// hint prefixed with ~ — a tier below a declared constraint.
+fn version_range(mod_entry: &ModEntry) -> String {
+    let declared = declared_range(mod_entry);
+    if declared != "-" {
+        return declared;
+    }
+    inferred_range(mod_entry)
+}
+
+/// The folder-name hint as displayed: a lower bound only — the game
+/// loads the lowest compatible folder, so folder structure never caps
+/// a mod from above.
 fn inferred_range(mod_entry: &ModEntry) -> String {
-    let min = mod_entry.inferred_min.as_deref();
-    let max = mod_entry.inferred_max.as_deref();
-    match (min, max) {
-        (Some(min), Some(max)) if min == max => format!("~{min}"),
-        (Some(min), Some(max)) => format!("~{min} - {max}"),
-        (Some(min), None) => format!("~{min}+"),
-        (None, Some(max)) => format!("~≤ {max}"),
-        (None, None) => "-".to_owned(),
+    match &mod_entry.inferred_min {
+        Some(min) => format!("~{min}+"),
+        None => "-".to_owned(),
     }
 }
 
