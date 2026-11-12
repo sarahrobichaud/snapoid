@@ -245,10 +245,7 @@ pub fn login_ok(output: &str) -> bool {
     };
     for line in output[start..].lines() {
         let line = line.trim_end();
-        if line.contains("ERROR (")
-            || line.contains("FAILED login")
-            || line.contains("Error!")
-        {
+        if line.contains("ERROR (") || line.contains("FAILED login") || line.contains("Error!") {
             return false;
         }
         if line.ends_with("OK") {

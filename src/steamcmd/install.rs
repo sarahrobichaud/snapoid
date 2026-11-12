@@ -12,10 +12,10 @@ use std::time::Duration;
 
 use anyhow::{Context as _, Result};
 
+use super::{Process, SteamCmd as _, is_update_restart};
 use crate::platform;
 use crate::registry::{self, SteamcmdPackage};
 use crate::{debug, info, warn};
-use super::{is_update_restart, Process, SteamCmd as _};
 
 /// How long the whole download may take. The zip is well under a
 /// megabyte, but slow links exist.
@@ -171,10 +171,8 @@ fn sha256_hex(bytes: &[u8]) -> String {
 
 /// Extract the zip into `target`, refusing entries that escape it.
 fn extract(bytes: &[u8], target: &Path) -> Result<()> {
-    let mut archive =
-        zip::ZipArchive::new(Cursor::new(bytes)).context("reading steamcmd.zip")?;
-    std::fs::create_dir_all(target)
-        .with_context(|| format!("creating {}", target.display()))?;
+    let mut archive = zip::ZipArchive::new(Cursor::new(bytes)).context("reading steamcmd.zip")?;
+    std::fs::create_dir_all(target).with_context(|| format!("creating {}", target.display()))?;
     for index in 0..archive.len() {
         let mut entry = archive.by_index(index)?;
         let name = entry.name().context("reading an archive entry name")?;
@@ -202,14 +200,12 @@ fn extract(bytes: &[u8], target: &Path) -> Result<()> {
 /// Resolve an archive entry name against `target`, refusing paths that
 /// escape it (zip-slip).
 fn entry_target(target: &Path, name: &str) -> Result<PathBuf> {
-    let escapes = Path::new(name)
-        .components()
-        .any(|component| {
-            !matches!(
-                component,
-                std::path::Component::Normal(_) | std::path::Component::CurDir
-            )
-        });
+    let escapes = Path::new(name).components().any(|component| {
+        !matches!(
+            component,
+            std::path::Component::Normal(_) | std::path::Component::CurDir
+        )
+    });
     if escapes {
         anyhow::bail!("the archive contains an unsafe path: {name}");
     }

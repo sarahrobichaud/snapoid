@@ -1,6 +1,3 @@
-use std::fs;
-use std::path::Path;
-
 use clap::Subcommand;
 
 use snapoid::fmt;
@@ -29,7 +26,7 @@ fn install(name: Option<String>) -> anyhow::Result<()> {
     let instance = store.instance(&name)?;
     let mods = store.list_mods()?;
     if mods.is_empty() {
-        println!("No mods stored; save some with `snapoid mods workshop save`.");
+        println!("No mods stored; update some with `snapoid mods update --workshop`.");
         return Ok(());
     }
 
@@ -58,10 +55,15 @@ fn install(name: Option<String>) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// One checklist row: workshop item id, the mods it bundles, and when
-/// the stored copy was captured.
+/// One checklist row: workshop item id, the mods it bundles (from the
+/// stored metadata, not a fresh disk walk), and when the stored copy
+/// was captured.
 fn describe_mod(mod_entry: &StoredMod) -> String {
-    let names = mod_names(&mod_entry.dir);
+    let names: Vec<String> = mod_entry
+        .mods
+        .iter()
+        .map(|m| m.title.clone().unwrap_or_else(|| m.name.clone()))
+        .collect();
     let updated = if mod_entry.time_updated == 0 {
         "unknown".to_owned()
     } else {
@@ -77,18 +79,4 @@ fn describe_mod(mod_entry: &StoredMod) -> String {
         },
         updated
     )
-}
-
-/// Mod folder names bundled in a stored workshop item.
-fn mod_names(item_dir: &Path) -> Vec<String> {
-    let Ok(entries) = fs::read_dir(item_dir.join("mods")) else {
-        return Vec::new();
-    };
-    let mut names: Vec<String> = entries
-        .flatten()
-        .filter(|entry| entry.path().is_dir())
-        .map(|entry| entry.file_name().to_string_lossy().into_owned())
-        .collect();
-    names.sort();
-    names
 }

@@ -32,9 +32,7 @@ pub fn run(command: AuthCommand) -> anyhow::Result<()> {
     match command {
         AuthCommand::Login { username } => login(username),
         AuthCommand::Status => status(),
-        AuthCommand::Logout {
-            clear_credentials,
-        } => logout(clear_credentials),
+        AuthCommand::Logout { clear_credentials } => logout(clear_credentials),
     }
 }
 
@@ -150,9 +148,7 @@ fn logout(clear_credentials: bool) -> anyhow::Result<()> {
             if steamcmd::login_ok(&output) {
                 snapoid::debug!("probe output: {output}");
                 if clear_credentials {
-                    snapoid::warn!(
-                        "steamcmd still accepts cached credentials for {name}"
-                    );
+                    snapoid::warn!("steamcmd still accepts cached credentials for {name}");
                 } else {
                     snapoid::warn!(
                         "steamcmd still accepts cached credentials for {name}; \
@@ -184,10 +180,7 @@ fn logout(clear_credentials: bool) -> anyhow::Result<()> {
 /// session is still up.
 fn revoke_args(clear_credentials: bool) -> Vec<String> {
     if clear_credentials {
-        vec![
-            "+clear_credentials".to_owned(),
-            "+logout".to_owned(),
-        ]
+        vec!["+clear_credentials".to_owned(), "+logout".to_owned()]
     } else {
         vec!["+logout".to_owned()]
     }

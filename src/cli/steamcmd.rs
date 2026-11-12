@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use clap::Subcommand;
 
-use snapoid::steamcmd::{self, install, SteamCmd as _};
+use snapoid::steamcmd::{self, SteamCmd as _, install};
 
 #[derive(Subcommand)]
 pub enum SteamcmdCommand {
@@ -18,10 +18,7 @@ pub enum SteamcmdCommand {
 
 /// Run steamcmd with the given arguments, handle steamcmd management
 /// subcommands, or show the located binary when there are none.
-pub fn run(
-    command: Option<SteamcmdCommand>,
-    args: Vec<String>,
-) -> anyhow::Result<()> {
+pub fn run(command: Option<SteamcmdCommand>, args: Vec<String>) -> anyhow::Result<()> {
     if let Some(command) = command {
         return match command {
             SteamcmdCommand::Install { to } => {

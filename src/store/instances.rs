@@ -123,12 +123,8 @@ impl Store {
                 )
             })?;
         }
-        fs::create_dir_all(&instance.profile_dir).with_context(|| {
-            format!(
-                "creating {}",
-                instance.profile_dir.display()
-            )
-        })?;
+        fs::create_dir_all(&instance.profile_dir)
+            .with_context(|| format!("creating {}", instance.profile_dir.display()))?;
         Ok(instance)
     }
 
@@ -191,11 +187,14 @@ mod tests {
         assert!(instance.game_dir.join("projectzomboid.jar").is_file());
         assert!(instance.dir.join("instance.json").is_file());
         assert!(instance.profile_dir.is_dir(), "profile should exist");
-        assert!(instance
-            .profile_dir
-            .read_dir()
-            .map(|mut entries| entries.next().is_none())
-            .unwrap_or(false), "fresh profile should be empty");
+        assert!(
+            instance
+                .profile_dir
+                .read_dir()
+                .map(|mut entries| entries.next().is_none())
+                .unwrap_or(false),
+            "fresh profile should be empty"
+        );
 
         // Unknown versions and duplicate names are rejected.
         assert!(store.instance_new("bad", "0.0").is_err());

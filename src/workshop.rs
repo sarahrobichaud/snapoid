@@ -34,9 +34,8 @@ pub fn download_items(cmd: &dyn SteamCmd, login: &str, item_ids: &[u64]) -> Resu
     for id in item_ids {
         let cached = content.join(id.to_string());
         if cached.is_dir() {
-            fs::remove_dir_all(&cached).with_context(|| {
-                format!("clearing steamcmd's cached copy {}", cached.display())
-            })?;
+            fs::remove_dir_all(&cached)
+                .with_context(|| format!("clearing steamcmd's cached copy {}", cached.display()))?;
         }
     }
 

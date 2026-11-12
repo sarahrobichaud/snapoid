@@ -12,6 +12,8 @@ use crate::warn;
 pub struct RemoteItem {
     pub id: u64,
     pub time_updated: u64,
+    /// The item's title, when the API reports one.
+    pub title: Option<String>,
 }
 
 const ENDPOINT: &str =
@@ -55,12 +57,16 @@ pub fn fetch_remote(item_ids: &[u64]) -> Result<Vec<RemoteItem>> {
                 continue;
             }
             let Ok(id) = file.publishedfileid.parse() else {
-                warn!("workshop item id {:?} is not a number", file.publishedfileid);
+                warn!(
+                    "workshop item id {:?} is not a number",
+                    file.publishedfileid
+                );
                 continue;
             };
             items.push(RemoteItem {
                 id,
                 time_updated: file.time_updated,
+                title: file.title,
             });
         }
     }
@@ -86,6 +92,8 @@ struct PublishedFileDetails {
     result: u32,
     #[serde(default)]
     time_updated: u64,
+    #[serde(default)]
+    title: Option<String>,
 }
 
 #[cfg(test)]
@@ -97,7 +105,7 @@ mod tests {
         let text = r#"{
             "response": {
                 "publishedfiledetails": [
-                    { "publishedfileid": "123", "result": 1, "time_updated": 1700000000 },
+                    { "publishedfileid": "123", "result": 1, "time_updated": 1700000000, "title": "A Mod" },
                     { "publishedfileid": "456", "result": 9 }
                 ]
             }
@@ -105,7 +113,15 @@ mod tests {
         let details: DetailsResponse = serde_json::from_str(text).unwrap();
         assert_eq!(details.response.publishedfiledetails.len(), 2);
         assert_eq!(details.response.publishedfiledetails[0].result, 1);
-        assert_eq!(details.response.publishedfiledetails[0].time_updated, 1_700_000_000);
+        assert_eq!(
+            details.response.publishedfiledetails[0].time_updated,
+            1_700_000_000
+        );
+        assert_eq!(
+            details.response.publishedfiledetails[0].title.as_deref(),
+            Some("A Mod")
+        );
         assert_eq!(details.response.publishedfiledetails[1].result, 9);
+        assert_eq!(details.response.publishedfiledetails[1].title, None);
     }
 }

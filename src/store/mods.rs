@@ -8,11 +8,10 @@ use std::time::Instant;
 use anyhow::{Context as _, Result};
 
 use crate::fmt;
-use crate::fsops::{
-    ProgressFactory, copy_tree, measure_tree, move_dir, swap_into_place, unix_now,
-};
+use crate::fsops::{ProgressFactory, copy_tree, measure_tree, move_dir, swap_into_place, unix_now};
+use crate::pz::item::{self, Layout, ModEntry};
 use crate::store::Store;
-use crate::store::meta::{self, ModMeta};
+use crate::store::meta::{self, ModMeta, Source};
 use crate::{debug, info};
 
 /// A stored copy of one workshop item, with all the mods it bundles.
@@ -23,6 +22,14 @@ pub struct StoredMod {
     pub time_updated: u64,
     pub dir: PathBuf,
     pub created: u64,
+    /// Workshop item title from the Steam Web API, when known.
+    pub title: Option<String>,
+    /// How the copy was obtained.
+    pub source: Option<Source>,
+    /// Mods bundled in this item, captured at save time.
+    pub mods: Vec<ModEntry>,
+    /// Layout of the bundled mods, when they share one.
+    pub layout: Option<Layout>,
 }
 
 impl Store {
@@ -34,11 +41,17 @@ impl Store {
         from: &Path,
         id: u64,
         time_updated: u64,
+        source: Source,
+        title: Option<&str>,
         progress: ProgressFactory,
     ) -> Result<StoredMod> {
         let created = unix_now();
         let dir = self.mod_dir(id);
         let staging = self.mods_dir().join(format!(".staging-{id}"));
+
+        // Capture the bundled mods' manifests before copying; the copy
+        // is identical, so either side would do.
+        let mods = item::inspect_item(from);
 
         if staging.exists() {
             fs::remove_dir_all(&staging)
@@ -62,12 +75,17 @@ impl Store {
             started.elapsed().as_secs_f32()
         );
 
+        let layout = shared_layout(&mods);
         meta::write(
             &staging.join("mod.json"),
             &ModMeta {
                 id,
                 time_updated,
                 created,
+                title: title.map(str::to_owned),
+                source: Some(source),
+                mods: mods.clone(),
+                layout,
             },
         )?;
 
@@ -78,6 +96,10 @@ impl Store {
             time_updated,
             dir,
             created,
+            title: title.map(str::to_owned),
+            source: Some(source),
+            mods,
+            layout,
         })
     }
 
@@ -86,9 +108,19 @@ impl Store {
     /// consumed: renamed when the filesystems match, copied and removed
     /// otherwise. Re-adopting an existing mod replaces it, with the old
     /// copy kept as a dot-prefixed sibling until the new one is in place.
-    pub fn adopt_mod_dir(&self, from: &Path, id: u64, time_updated: u64) -> Result<StoredMod> {
+    pub fn adopt_mod_dir(
+        &self,
+        from: &Path,
+        id: u64,
+        time_updated: u64,
+        source: Source,
+        title: Option<&str>,
+    ) -> Result<StoredMod> {
         let created = unix_now();
         let dir = self.mod_dir(id);
+
+        // Inspect before the move consumes `from`.
+        let mods = item::inspect_item(from);
 
         if from != dir {
             if dir.exists() {
@@ -111,12 +143,17 @@ impl Store {
             }
         }
 
+        let layout = shared_layout(&mods);
         meta::write(
             &dir.join("mod.json"),
             &ModMeta {
                 id,
                 time_updated,
                 created,
+                title: title.map(str::to_owned),
+                source: Some(source),
+                mods: mods.clone(),
+                layout,
             },
         )?;
 
@@ -125,6 +162,10 @@ impl Store {
             time_updated,
             dir,
             created,
+            title: title.map(str::to_owned),
+            source: Some(source),
+            mods,
+            layout,
         })
     }
 
@@ -156,7 +197,14 @@ impl Store {
                 id,
                 time_updated: mod_meta.as_ref().map(|m| m.time_updated).unwrap_or(0),
                 dir: path,
-                created: mod_meta.map(|m| m.created).unwrap_or(0),
+                created: mod_meta.as_ref().map(|m| m.created).unwrap_or(0),
+                title: mod_meta.as_ref().and_then(|m| m.title.clone()),
+                source: mod_meta.as_ref().and_then(|m| m.source),
+                mods: mod_meta
+                    .as_ref()
+                    .map(|m| m.mods.clone())
+                    .unwrap_or_default(),
+                layout: mod_meta.as_ref().and_then(|m| m.layout),
             });
         }
 
@@ -168,16 +216,25 @@ impl Store {
     /// unreadable meta counts as not stored, so a re-save can repair it.
     pub fn stored_mod(&self, id: u64) -> Result<Option<StoredMod>> {
         let dir = self.mod_dir(id);
-        let mod_meta = meta::read::<ModMeta>(&dir.join("mod.json"))
-            .ok()
-            .flatten();
+        let mod_meta = meta::read::<ModMeta>(&dir.join("mod.json")).ok().flatten();
         Ok(mod_meta.map(|m| StoredMod {
             id: m.id,
             time_updated: m.time_updated,
             dir,
             created: m.created,
+            title: m.title,
+            source: m.source,
+            mods: m.mods,
+            layout: m.layout,
         }))
     }
+}
+
+/// The one layout all bundled mods share, or None when they differ (or
+/// there are no mods).
+fn shared_layout(mods: &[ModEntry]) -> Option<Layout> {
+    let first = mods.first()?.layout;
+    mods.iter().all(|m| m.layout == first).then_some(first)
 }
 
 #[cfg(test)]
@@ -192,24 +249,50 @@ mod tests {
 
         let from = base.join("workshop/123");
         fs::create_dir_all(from.join("mods/Test Mod"))?;
-        fs::write(from.join("mods/Test Mod/mod.info"), "name=Test Mod\n")?;
+        fs::write(
+            from.join("mods/Test Mod/mod.info"),
+            "name=Test Mod\nid=TM\nversionMin=42.16\nrequire=\\Lib, Other\n",
+        )?;
 
-        let stored = store.save_mod_copy(&from, 123, 1_700_000_000, noop_progress)?;
+        let stored = store.save_mod_copy(
+            &from,
+            123,
+            1_700_000_000,
+            Source::WorkshopDisk,
+            Some("A Mod Pack"),
+            noop_progress,
+        )?;
         assert_eq!(stored.id, 123);
         assert_eq!(stored.time_updated, 1_700_000_000);
         assert_eq!(stored.dir, store.mod_dir(123));
+        assert_eq!(stored.title.as_deref(), Some("A Mod Pack"));
+        assert_eq!(stored.source, Some(Source::WorkshopDisk));
+        assert_eq!(stored.mods.len(), 1);
+        assert_eq!(stored.mods[0].mod_id.as_deref(), Some("TM"));
+        assert_eq!(stored.mods[0].version_min.as_deref(), Some("42.16"));
+        assert_eq!(stored.mods[0].requires, vec!["Lib", "Other"]);
+        assert_eq!(stored.layout, Some(Layout::B41));
         assert!(stored.dir.join("mods/Test Mod/mod.info").is_file());
         assert!(stored.dir.join("mod.json").is_file());
         assert!(from.exists(), "disk source must be kept");
 
         // Re-saving replaces the stored copy.
         fs::write(from.join("mods/Test Mod/mod.info"), "name=Test Mod v2\n")?;
-        store.save_mod_copy(&from, 123, 1_700_000_100, noop_progress)?;
+        store.save_mod_copy(
+            &from,
+            123,
+            1_700_000_100,
+            Source::WorkshopDisk,
+            None,
+            noop_progress,
+        )?;
         assert_eq!(
             fs::read_to_string(store.mod_dir(123).join("mods/Test Mod/mod.info"))?,
             "name=Test Mod v2\n"
         );
-        assert_eq!(store.stored_mod(123)?.unwrap().time_updated, 1_700_000_100);
+        let stored = store.stored_mod(123)?.unwrap();
+        assert_eq!(stored.time_updated, 1_700_000_100);
+        assert_eq!(stored.title, None);
         assert!(store.stored_mod(456)?.is_none());
 
         fs::remove_dir_all(&base)?;
@@ -225,9 +308,22 @@ mod tests {
         let from = base.join("workshop/456");
         fs::create_dir_all(from.join("mods/Test Mod"))?;
         fs::write(from.join("mods/Test Mod/mod.info"), "mod")?;
-        store.save_mod_copy(&from, 456, 1_700_000_000, noop_progress)?;
+        store.save_mod_copy(
+            &from,
+            456,
+            1_700_000_000,
+            Source::WorkshopDisk,
+            None,
+            noop_progress,
+        )?;
         fs::create_dir_all(base.join("cache/123"))?;
-        store.adopt_mod_dir(&base.join("cache/123"), 123, 1_700_000_100)?;
+        store.adopt_mod_dir(
+            &base.join("cache/123"),
+            123,
+            1_700_000_100,
+            Source::Steamcmd,
+            None,
+        )?;
 
         // Staging and retired dirs are dot-prefixed and never listed.
         fs::create_dir_all(store.mods_dir().join(".staging-789"))?;
@@ -236,6 +332,7 @@ mod tests {
         let ids: Vec<u64> = mods.iter().map(|m| m.id).collect();
         assert_eq!(ids, vec![123, 456]);
         assert_eq!(mods[0].time_updated, 1_700_000_100);
+        assert_eq!(mods[0].source, Some(Source::Steamcmd));
         assert_eq!(mods[1].time_updated, 1_700_000_000);
 
         // A damaged meta still lists the mod, with unknown times.
@@ -243,6 +340,7 @@ mod tests {
         let mods = store.list_mods()?;
         assert_eq!(mods[0].id, 123);
         assert_eq!(mods[0].time_updated, 0);
+        assert!(mods[0].mods.is_empty());
 
         fs::remove_dir_all(&base)?;
         Ok(())
@@ -254,20 +352,58 @@ mod tests {
         let store = Store::open_at(&base)?;
 
         let from = base.join("steamcmd-cache/123");
-        fs::create_dir_all(from.join("mods/Test Mod"))?;
-        fs::write(from.join("mods/Test Mod/mod.info"), "mod")?;
+        fs::create_dir_all(from.join("mods/Test Mod/42.16"))?;
+        fs::write(
+            from.join("mods/Test Mod/42.16/mod.info"),
+            "name=Test Mod\nid=TM\n",
+        )?;
 
-        let stored = store.adopt_mod_dir(&from, 123, 1_700_000_000)?;
+        let stored = store.adopt_mod_dir(
+            &from,
+            123,
+            1_700_000_000,
+            Source::Steamcmd,
+            Some("Test Pack"),
+        )?;
         assert_eq!(stored.dir, store.mod_dir(123));
-        assert!(stored.dir.join("mods/Test Mod/mod.info").is_file());
+        assert_eq!(stored.title.as_deref(), Some("Test Pack"));
+        assert_eq!(stored.source, Some(Source::Steamcmd));
+        assert_eq!(stored.mods.len(), 1);
+        assert_eq!(stored.mods[0].layout, Layout::B42);
+        assert!(stored.dir.join("mods/Test Mod/42.16/mod.info").is_file());
         assert!(!from.exists(), "source must be consumed");
 
         // Re-adopting replaces the stored copy.
         fs::create_dir_all(&from)?;
         fs::write(from.join("marker"), "new")?;
-        store.adopt_mod_dir(&from, 123, 1_700_000_100)?;
-        assert_eq!(fs::read_to_string(store.mod_dir(123).join("marker"))?, "new");
+        store.adopt_mod_dir(&from, 123, 1_700_000_100, Source::Steamcmd, None)?;
+        assert_eq!(
+            fs::read_to_string(store.mod_dir(123).join("marker"))?,
+            "new"
+        );
         assert_eq!(store.stored_mod(123)?.unwrap().time_updated, 1_700_000_100);
+
+        fs::remove_dir_all(&base)?;
+        Ok(())
+    }
+
+    /// A sidecar written before the enriched metadata still lists.
+    #[test]
+    fn lists_old_sidecar_without_new_fields() -> Result<()> {
+        let base = std::env::temp_dir().join(format!("snapoid-modold-{}", std::process::id()));
+        let store = Store::open_at(&base)?;
+        fs::create_dir_all(store.mod_dir(77))?;
+        fs::write(
+            store.mod_dir(77).join("mod.json"),
+            r#"{ "id": 77, "time_updated": 5, "created": 6 }"#,
+        )?;
+
+        let stored = store.stored_mod(77)?.unwrap();
+        assert_eq!(stored.time_updated, 5);
+        assert_eq!(stored.created, 6);
+        assert_eq!(stored.title, None);
+        assert_eq!(stored.source, None);
+        assert!(stored.mods.is_empty());
 
         fs::remove_dir_all(&base)?;
         Ok(())

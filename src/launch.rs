@@ -93,11 +93,7 @@ pub fn plan(instance: &GameInstance, options: &LaunchOptions) -> Result<LaunchPl
         args.push("-nosteam".to_owned());
     }
 
-    Ok(LaunchPlan {
-        program,
-        args,
-        cwd,
-    })
+    Ok(LaunchPlan { program, args, cwd })
 }
 
 /// Run the game attached to this console and block until it exits.
@@ -292,7 +288,10 @@ mod tests {
         let args = server_args(";", r"C:\p");
         let text = args.join(" ");
         assert!(text.contains("zombie.network.GameServer"));
-        assert!(text.contains("-Dzomboid.steam=1"), "server must be Steam-enabled");
+        assert!(
+            text.contains("-Dzomboid.steam=1"),
+            "server must be Steam-enabled"
+        );
         assert!(text.contains("-XX:+UseZGC"));
         assert!(text.contains("-Djava.library.path=./natives/;./natives/win64/;./"));
         assert!(text.contains("-cachedir=C:\\p"));
@@ -410,7 +409,11 @@ mod tests {
             "java.exe is preferred over java"
         );
         std::fs::remove_file(dir.join("jre64/bin/java.exe")).unwrap();
-        assert_eq!(java_in(&dir), None, "a native java is not in a Windows depot");
+        assert_eq!(
+            java_in(&dir),
+            None,
+            "a native java is not in a Windows depot"
+        );
 
         std::fs::write(dir.join("jre64/bin/java"), "jvm").unwrap();
         assert_eq!(java_in(&dir), Some(dir.join("jre64/bin/java")));

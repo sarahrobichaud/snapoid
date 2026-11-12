@@ -28,7 +28,7 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Manage workshop mods
+    /// Manage mods
     Mods {
         #[command(subcommand)]
         command: mods::ModsCommand,

@@ -90,8 +90,7 @@ pub fn load_file(path: &Path) -> Result<Registry> {
 /// Write the registry in canonical file form: pretty JSON, trailing
 /// newline, same shape the parser reads.
 pub fn save_file(path: &Path, registry: &Registry) -> Result<()> {
-    fs::write(path, to_json(registry)?)
-        .with_context(|| format!("writing {}", path.display()))
+    fs::write(path, to_json(registry)?).with_context(|| format!("writing {}", path.display()))
 }
 
 /// The canonical JSON form of a registry: what `save_file` writes and
@@ -113,8 +112,7 @@ pub fn to_json(registry: &Registry) -> Result<String> {
             sha256: package.sha256.clone(),
         }),
     };
-    let mut text =
-        serde_json::to_string_pretty(&file).context("serializing the registry")?;
+    let mut text = serde_json::to_string_pretty(&file).context("serializing the registry")?;
     text.push('\n');
     Ok(text)
 }
@@ -285,7 +283,8 @@ mod tests {
             }),
         };
 
-        let path = std::env::temp_dir().join(format!("snapoid-registry-{}.json", std::process::id()));
+        let path =
+            std::env::temp_dir().join(format!("snapoid-registry-{}.json", std::process::id()));
         save_file(&path, &registry)?;
         let loaded = load_file(&path)?;
         assert_eq!(loaded, registry);

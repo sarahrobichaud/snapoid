@@ -34,6 +34,7 @@ use crate::{info, warn};
 
 pub use games::StoredGame;
 pub use instances::GameInstance;
+pub use meta::Source;
 pub use mods::StoredMod;
 pub use snapshots::SnapshotRef;
 

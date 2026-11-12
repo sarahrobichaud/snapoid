@@ -2,6 +2,7 @@
 //! probing.
 
 pub mod appmanifest;
+pub mod item;
 pub mod mod_info;
 pub mod probe;
 pub mod version;

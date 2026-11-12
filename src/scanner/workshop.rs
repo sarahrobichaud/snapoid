@@ -4,14 +4,16 @@
 //! supported game version range parsed from its mod.info files.
 
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use anyhow::{Context as _, Result};
 
 use crate::parser::acf::{self, Acf};
-use crate::pz::{self, mod_info, version::Version};
+use crate::pz::{self, item::inspect_item};
 use crate::steam::SteamPaths;
 use crate::warn;
+
+pub use crate::pz::item::ModEntry;
 
 #[derive(Debug)]
 pub struct WorkshopItem {
@@ -21,18 +23,6 @@ pub struct WorkshopItem {
     pub time_updated: u64,
     /// Mods bundled in this workshop item.
     pub mods: Vec<ModEntry>,
-}
-
-#[derive(Debug)]
-pub struct ModEntry {
-    /// Mod folder name under <pfid>/mods/.
-    pub name: String,
-    /// Lowest versionMin declared across the mod's mod.info manifests.
-    /// None when no manifest declares it.
-    pub version_min: Option<Version>,
-    /// Highest versionMax declared across the mod's mod.info manifests.
-    /// None when no manifest declares it.
-    pub version_max: Option<Version>,
 }
 
 /// Inventory the installed workshop items for PZ.
@@ -61,7 +51,7 @@ pub fn scan(paths: &SteamPaths) -> Result<Vec<WorkshopItem>> {
                     items.push(WorkshopItem {
                         id,
                         time_updated,
-                        mods: list_mods(&paths.workshop_content.join(id.to_string())),
+                        mods: inspect_item(&paths.workshop_content.join(id.to_string())),
                     });
                 }
             }
@@ -92,7 +82,7 @@ pub fn scan(paths: &SteamPaths) -> Result<Vec<WorkshopItem>> {
         items.push(WorkshopItem {
             id,
             time_updated: 0,
-            mods: list_mods(&entry.path()),
+            mods: inspect_item(&entry.path()),
         });
     }
 
@@ -110,60 +100,6 @@ fn workshop_acf_path(paths: &SteamPaths) -> PathBuf {
         .nth(2)
         .unwrap_or(paths.workshop_content.as_path())
         .join(format!("appworkshop_{}.acf", pz::APP_ID))
-}
-
-/// Mods bundled in a workshop item. A folder under <pfid>/mods/ counts as
-/// a mod when it contains a mod.info (Build 41 style) or when any of its
-/// immediate subdirectories does (Build 42 style version folders).
-///
-/// The mod.info manifests are the single source of truth for the
-/// supported version range: versionMin/versionMax fields are aggregated
-/// across every manifest found. Version folder names are deliberately
-/// ignored — deriving versions from on-disk layout is a compatibility
-/// concern for a separate component.
-fn list_mods(item_dir: &Path) -> Vec<ModEntry> {
-    let mut mods = Vec::new();
-    let Ok(entries) = fs::read_dir(item_dir.join("mods")) else {
-        return mods;
-    };
-    for entry in entries.flatten() {
-        let dir = entry.path();
-        let name = entry.file_name().to_string_lossy().into_owned();
-
-        let mut manifests: Vec<PathBuf> = Vec::new();
-        let direct = dir.join("mod.info");
-        if direct.is_file() {
-            manifests.push(direct);
-        }
-        if let Ok(versions) = fs::read_dir(&dir) {
-            for version in versions.flatten() {
-                let info = version.path().join("mod.info");
-                if info.is_file() {
-                    manifests.push(info);
-                }
-            }
-        }
-        if manifests.is_empty() {
-            continue;
-        }
-
-        let mins: Vec<Version> = manifests
-            .iter()
-            .filter_map(|manifest| mod_info::parse(manifest).min)
-            .collect();
-        let maxs: Vec<Version> = manifests
-            .iter()
-            .filter_map(|manifest| mod_info::parse(manifest).max)
-            .collect();
-
-        mods.push(ModEntry {
-            name,
-            version_min: mins.iter().min().cloned(),
-            version_max: maxs.iter().max().cloned(),
-        });
-    }
-    mods.sort_by(|a, b| a.name.cmp(&b.name));
-    mods
 }
 
 #[cfg(test)]
@@ -254,20 +190,11 @@ mod tests {
         assert_eq!(items[1].mods.len(), 3);
 
         assert_eq!(items[1].mods[0].name, "B42 Mod");
-        assert_eq!(
-            items[1].mods[0].version_min.as_ref().map(Version::text),
-            Some("42.16.0")
-        );
-        assert_eq!(
-            items[1].mods[0].version_max.as_ref().map(Version::text),
-            Some("42.99.0")
-        );
+        assert_eq!(items[1].mods[0].version_min.as_deref(), Some("42.16.0"));
+        assert_eq!(items[1].mods[0].version_max.as_deref(), Some("42.99.0"));
 
         assert_eq!(items[1].mods[1].name, "Hybrid Mod");
-        assert_eq!(
-            items[1].mods[1].version_min.as_ref().map(Version::text),
-            Some("42.5.0")
-        );
+        assert_eq!(items[1].mods[1].version_min.as_deref(), Some("42.5.0"));
         assert_eq!(items[1].mods[1].version_max, None);
 
         assert_eq!(items[1].mods[2].name, "Test Mod");

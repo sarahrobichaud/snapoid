@@ -3,54 +3,235 @@
 
 use snapoid::download::Downloaded;
 use snapoid::fmt;
+use snapoid::pz::item::Layout;
 use snapoid::pz::probe::GameVersionInfo;
+use snapoid::pz::version::Version;
 use snapoid::registry::Registry;
 use snapoid::scanner::workshop::{ModEntry, WorkshopItem};
 use snapoid::steam::SteamPaths;
-use snapoid::store::{GameInstance, StoredGame, StoredMod};
+use snapoid::store::{GameInstance, Source, StoredGame, StoredMod};
 
-/// Render the workshop inventory from `scan`.
+/// Render the workshop inventory from `scan`: per item, one row per
+/// bundled mod with its layout, Mod ID, version range, and declared
+/// dependencies.
 pub fn print_scan(items: &[WorkshopItem]) {
-    let mut total_mods = 0;
+    let mut tally = LayoutTally::default();
     for item in items {
-        total_mods += item.mods.len();
-        let updated = if item.time_updated == 0 {
-            "unknown".to_string()
-        } else {
-            fmt::format_date_utc(item.time_updated)
-        };
-        println!("\n{}  updated {}", item.id, updated);
-
-        let name_width = item
-            .mods
-            .iter()
-            .map(|m| m.name.chars().count())
-            .max()
-            .unwrap_or(0);
+        println!(
+            "\n{}  updated {}  {} mod{}",
+            item.id,
+            updated_text(item.time_updated),
+            item.mods.len(),
+            plural(item.mods.len())
+        );
+        let (name_width, id_width) = row_widths(&item.mods);
         if item.mods.is_empty() {
             println!("  (no mods found)");
         }
         for m in &item.mods {
-            println!("  {:name_width$}  {}", m.name, version_range(m));
+            tally.add(m.layout);
+            println!("{}", mod_row(m, name_width, id_width));
         }
     }
 
     println!(
-        "\n{} workshop item{}, {} mod{}",
+        "\n{} workshop item{}, {} mod{} — {}",
         items.len(),
         plural(items.len()),
-        total_mods,
-        plural(total_mods)
+        tally.total(),
+        plural(tally.total()),
+        tally.breakdown()
     );
 }
 
-/// The supported version range of a mod, as displayed.
+/// Render the stored workshop items: what the library holds, from the
+/// metadata captured at save time — no disk walks.
+pub fn print_stored_mods(items: &[StoredMod]) {
+    let mut tally = LayoutTally::default();
+    for item in items {
+        let mut header = format!(
+            "\n{}  updated {}",
+            item.id,
+            updated_text(item.time_updated)
+        );
+        if let Some(title) = &item.title {
+            header.push_str(&format!("  {title}"));
+        }
+        if let Some(source) = item.source {
+            header.push_str(&format!("  ({})", source_text(source)));
+        }
+        header.push_str(&format!(
+            "  {} mod{}",
+            item.mods.len(),
+            plural(item.mods.len())
+        ));
+        println!("{header}");
+
+        let (name_width, id_width) = row_widths(&item.mods);
+        if item.mods.is_empty() {
+            // Old sidecars predate the captured metadata.
+            println!("  (no mods recorded)");
+        }
+        for m in &item.mods {
+            tally.add(m.layout);
+            println!("{}", mod_row(m, name_width, id_width));
+        }
+    }
+
+    println!(
+        "\n{} workshop item{}, {} mod{} — {}",
+        items.len(),
+        plural(items.len()),
+        tally.total(),
+        plural(tally.total()),
+        tally.breakdown()
+    );
+}
+
+/// The update timestamp of an item, as displayed.
+fn updated_text(time_updated: u64) -> String {
+    if time_updated == 0 {
+        "unknown".to_string()
+    } else {
+        fmt::format_date_utc(time_updated)
+    }
+}
+
+/// How a stored copy was obtained, as displayed.
+fn source_text(source: Source) -> &'static str {
+    match source {
+        Source::WorkshopDisk => "from disk",
+        Source::Steamcmd => "from steamcmd",
+    }
+}
+
+/// Column widths for the shared mod-row layout.
+fn row_widths(mods: &[ModEntry]) -> (usize, usize) {
+    let name_width = mods
+        .iter()
+        .map(|m| m.name.chars().count())
+        .max()
+        .unwrap_or(0);
+    let id_width = mods
+        .iter()
+        .map(|m| mod_id_text(m).chars().count())
+        .max()
+        .unwrap_or(0);
+    (name_width, id_width)
+}
+
+/// One row per bundled mod: name, layout, Mod ID, version range, and
+/// declared dependencies.
+fn mod_row(mod_entry: &ModEntry, name_width: usize, id_width: usize) -> String {
+    let mut row = format!(
+        "  {:name_width$}  {:<6}  {:id_width$}  {}",
+        mod_entry.name,
+        layout_tag(mod_entry.layout),
+        mod_id_text(mod_entry),
+        version_range(mod_entry)
+    );
+    let dependencies = dependency_text(mod_entry);
+    if !dependencies.is_empty() {
+        row.push_str("  ");
+        row.push_str(&dependencies);
+    }
+    if mod_entry.layout == Layout::B41 {
+        // The B42 loader never reads a root mod.info, so a B41-only
+        // folder is invisible to it.
+        row.push_str("  (not loaded by B42)");
+    }
+    row
+}
+
+/// The Mod ID column: the activation key the game and dependency
+/// declarations reference.
+fn mod_id_text(mod_entry: &ModEntry) -> String {
+    match &mod_entry.mod_id {
+        Some(id) => format!("id={id}"),
+        None => "id ?".to_owned(),
+    }
+}
+
+fn layout_tag(layout: Layout) -> &'static str {
+    match layout {
+        Layout::B41 => "B41",
+        Layout::B42 => "B42",
+        Layout::Hybrid => "HYBRID",
+    }
+}
+
+/// Declared dependencies and load-order overrides, as displayed. Empty
+/// when the mod declares none.
+fn dependency_text(mod_entry: &ModEntry) -> String {
+    let mut parts = Vec::new();
+    if !mod_entry.requires.is_empty() {
+        parts.push(format!("requires {}", mod_entry.requires.join(", ")));
+    }
+    if !mod_entry.incompatible.is_empty() {
+        parts.push(format!(
+            "incompatible {}",
+            mod_entry.incompatible.join(", ")
+        ));
+    }
+    if !mod_entry.load_before.is_empty() {
+        parts.push(format!("before {}", mod_entry.load_before.join(", ")));
+    }
+    if !mod_entry.load_after.is_empty() {
+        parts.push(format!("after {}", mod_entry.load_after.join(", ")));
+    }
+    parts.join("  ")
+}
+
+/// Running tally of mod layouts for the summary line.
+#[derive(Default)]
+struct LayoutTally {
+    b41: usize,
+    b42: usize,
+    hybrid: usize,
+}
+
+impl LayoutTally {
+    fn add(&mut self, layout: Layout) {
+        match layout {
+            Layout::B41 => self.b41 += 1,
+            Layout::B42 => self.b42 += 1,
+            Layout::Hybrid => self.hybrid += 1,
+        }
+    }
+
+    fn total(&self) -> usize {
+        self.b41 + self.b42 + self.hybrid
+    }
+
+    fn breakdown(&self) -> String {
+        let mut parts = Vec::new();
+        if self.b41 > 0 {
+            parts.push(format!("{} B41-only", self.b41));
+        }
+        if self.b42 > 0 {
+            parts.push(format!("{} B42", self.b42));
+        }
+        if self.hybrid > 0 {
+            parts.push(format!("{} hybrid", self.hybrid));
+        }
+        if parts.is_empty() {
+            "no mods".to_owned()
+        } else {
+            parts.join(", ")
+        }
+    }
+}
+
+/// The supported version range of a mod, as displayed. Unbounded ends
+/// are shown as unknown, not as compatible.
 fn version_range(mod_entry: &ModEntry) -> String {
-    match (&mod_entry.version_min, &mod_entry.version_max) {
-        (Some(min), Some(max)) if min == max => min.text().to_owned(),
-        (Some(min), Some(max)) => format!("{} - {}", min.text(), max.text()),
-        (Some(min), None) => format!("{}+", min.text()),
-        (None, Some(max)) => format!("- {}", max.text()),
+    let min = mod_entry.version_min.as_deref();
+    let max = mod_entry.version_max.as_deref();
+    match (min, max) {
+        (Some(min), Some(max)) if Version::new(min) == Version::new(max) => min.to_owned(),
+        (Some(min), Some(max)) => format!("{min} - {max}"),
+        (Some(min), None) => format!("{min}+"),
+        (None, Some(max)) => format!("- {max}"),
         (None, None) => "-".to_string(),
     }
 }
@@ -102,7 +283,11 @@ pub fn print_downloaded(downloaded: &Downloaded) {
 /// Render a freshly saved workshop mod.
 pub fn print_saved_mod(stored: &StoredMod) {
     println!("mod {} saved", stored.id);
-    println!("  path: {}", stored.dir.display());
+    if let Some(title) = &stored.title {
+        println!("  title: {title}");
+    }
+    println!("  mods:  {}", stored.mods.len());
+    println!("  path:  {}", stored.dir.display());
 }
 
 /// Render the list of stored game versions.

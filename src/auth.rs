@@ -58,9 +58,7 @@ pub fn clear(root: &Path) -> Result<()> {
     match fs::remove_file(path(root)) {
         Ok(()) => Ok(()),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(error) => {
-            Err(error).with_context(|| format!("removing {}", path(root).display()))
-        }
+        Err(error) => Err(error).with_context(|| format!("removing {}", path(root).display())),
     }
 }
 
