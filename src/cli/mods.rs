@@ -37,6 +37,20 @@ pub enum ModsCommand {
         #[arg(long)]
         copy: bool,
     },
+    /// Developer diagnostics for the mod store (dev builds only)
+    #[cfg(debug_assertions)]
+    Debug {
+        #[command(subcommand)]
+        command: DebugCommand,
+    },
+}
+
+#[derive(Subcommand)]
+#[cfg(debug_assertions)]
+pub enum DebugCommand {
+    /// Rebuild every stored mod's mod.json sidecar from the files
+    /// already in the store, without downloading anything
+    RepairMeta,
 }
 
 pub fn run(command: ModsCommand) -> anyhow::Result<()> {
@@ -51,6 +65,10 @@ pub fn run(command: ModsCommand) -> anyhow::Result<()> {
             }
         }
         ModsCommand::Update { workshop: _, copy } => update(copy),
+        #[cfg(debug_assertions)]
+        ModsCommand::Debug { command } => match command {
+            DebugCommand::RepairMeta => repair_meta(),
+        },
     }
 }
 
@@ -78,6 +96,21 @@ fn list_store() -> anyhow::Result<()> {
     }
     snapoid::info!("{} workshop item(s) stored", items.len());
     report::print_stored_mods(&items);
+    Ok(())
+}
+
+/// Rebuild the stored mods' sidecars from the stored files and show
+/// the result.
+#[cfg(debug_assertions)]
+fn repair_meta() -> anyhow::Result<()> {
+    let store = super::open_store()?;
+    let repaired = store.repair_mod_meta()?;
+    if repaired.is_empty() {
+        println!("No mods stored; nothing to repair.");
+        return Ok(());
+    }
+    snapoid::info!("rebuilt {} mod manifest(s)", repaired.len());
+    report::print_stored_mods(&repaired);
     Ok(())
 }
 

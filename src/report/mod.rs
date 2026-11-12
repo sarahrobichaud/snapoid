@@ -16,6 +16,7 @@ use snapoid::store::{GameInstance, Source, StoredGame, StoredMod};
 /// dependencies.
 pub fn print_scan(items: &[WorkshopItem]) {
     let mut tally = LayoutTally::default();
+    let mut inferred = 0;
     for item in items {
         println!(
             "\n{}  updated {}  {} mod{}",
@@ -30,17 +31,21 @@ pub fn print_scan(items: &[WorkshopItem]) {
         }
         for m in &item.mods {
             tally.add(m.layout);
+            if is_inferred(m) {
+                inferred += 1;
+            }
             println!("{}", mod_row(m, name_width, id_width));
         }
     }
 
     println!(
-        "\n{} workshop item{}, {} mod{} — {}",
+        "\n{} workshop item{}, {} mod{} — {}{}",
         items.len(),
         plural(items.len()),
         tally.total(),
         plural(tally.total()),
-        tally.breakdown()
+        tally.breakdown(),
+        inferred_legend(inferred)
     );
 }
 
@@ -48,6 +53,7 @@ pub fn print_scan(items: &[WorkshopItem]) {
 /// metadata captured at save time — no disk walks.
 pub fn print_stored_mods(items: &[StoredMod]) {
     let mut tally = LayoutTally::default();
+    let mut inferred = 0;
     for item in items {
         let mut header = format!(
             "\n{}  updated {}",
@@ -74,17 +80,21 @@ pub fn print_stored_mods(items: &[StoredMod]) {
         }
         for m in &item.mods {
             tally.add(m.layout);
+            if is_inferred(m) {
+                inferred += 1;
+            }
             println!("{}", mod_row(m, name_width, id_width));
         }
     }
 
     println!(
-        "\n{} workshop item{}, {} mod{} — {}",
+        "\n{} workshop item{}, {} mod{} — {}{}",
         items.len(),
         plural(items.len()),
         tally.total(),
         plural(tally.total()),
-        tally.breakdown()
+        tally.breakdown(),
+        inferred_legend(inferred)
     );
 }
 
@@ -102,6 +112,15 @@ fn source_text(source: Source) -> &'static str {
     match source {
         Source::WorkshopDisk => "from disk",
         Source::Steamcmd => "from steamcmd",
+    }
+}
+
+/// Legend for inferred ranges, shown only when any were displayed.
+fn inferred_legend(count: usize) -> String {
+    if count > 0 {
+        " (~ = inferred from folder names)".to_owned()
+    } else {
+        String::new()
     }
 }
 
@@ -223,7 +242,9 @@ impl LayoutTally {
 }
 
 /// The supported version range of a mod, as displayed. Unbounded ends
-/// are shown as unknown, not as compatible.
+/// are shown as unknown, not as compatible. Declared constraints win;
+/// when the manifests declare nothing, the folder-name hint is shown
+/// prefixed with ~ — a tier below a declared constraint.
 fn version_range(mod_entry: &ModEntry) -> String {
     let min = mod_entry.version_min.as_deref();
     let max = mod_entry.version_max.as_deref();
@@ -232,8 +253,30 @@ fn version_range(mod_entry: &ModEntry) -> String {
         (Some(min), Some(max)) => format!("{min} - {max}"),
         (Some(min), None) => format!("{min}+"),
         (None, Some(max)) => format!("- {max}"),
-        (None, None) => "-".to_string(),
+        (None, None) => inferred_range(mod_entry),
     }
+}
+
+/// The folder-name hint as a range. Inference yields both ends or
+/// neither — both come from the same folder set.
+fn inferred_range(mod_entry: &ModEntry) -> String {
+    let min = mod_entry.inferred_min.as_deref();
+    let max = mod_entry.inferred_max.as_deref();
+    match (min, max) {
+        (Some(min), Some(max)) if min == max => format!("~{min}"),
+        (Some(min), Some(max)) => format!("~{min} - {max}"),
+        (Some(min), None) => format!("~{min}+"),
+        (None, Some(max)) => format!("~≤ {max}"),
+        (None, None) => "-".to_owned(),
+    }
+}
+
+/// True when the displayed range is the folder-name hint rather than a
+/// declared constraint.
+fn is_inferred(mod_entry: &ModEntry) -> bool {
+    mod_entry.version_min.is_none()
+        && mod_entry.version_max.is_none()
+        && mod_entry.inferred_min.is_some()
 }
 
 /// Render detected game version info for the detect/probe commands.

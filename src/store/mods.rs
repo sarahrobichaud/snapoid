@@ -216,7 +216,9 @@ impl Store {
     /// unreadable meta counts as not stored, so a re-save can repair it.
     pub fn stored_mod(&self, id: u64) -> Result<Option<StoredMod>> {
         let dir = self.mod_dir(id);
-        let mod_meta = meta::read::<ModMeta>(&dir.join("mod.json")).ok().flatten();
+        let mod_meta = meta::read::<ModMeta>(&dir.join("mod.json"))
+            .ok()
+            .flatten();
         Ok(mod_meta.map(|m| StoredMod {
             id: m.id,
             time_updated: m.time_updated,
@@ -227,6 +229,38 @@ impl Store {
             mods: m.mods,
             layout: m.layout,
         }))
+    }
+
+    /// Rebuild the metadata sidecar of every stored workshop item from
+    /// the files already in the store — no downloads. Capture-time
+    /// fields (id, time_updated, created, title, source) are kept as
+    /// recorded; everything derivable from the stored files (bundled
+    /// mods, layout, inferred ranges) is re-derived. Idempotent.
+    /// Returns the repaired items.
+    pub fn repair_mod_meta(&self) -> Result<Vec<StoredMod>> {
+        let mut repaired = Vec::new();
+        for stored in self.list_mods()? {
+            let mods = item::inspect_item(&stored.dir);
+            let layout = shared_layout(&mods);
+            meta::write(
+                &stored.dir.join("mod.json"),
+                &ModMeta {
+                    id: stored.id,
+                    time_updated: stored.time_updated,
+                    created: stored.created,
+                    title: stored.title.clone(),
+                    source: stored.source,
+                    mods: mods.clone(),
+                    layout,
+                },
+            )?;
+            repaired.push(StoredMod {
+                mods,
+                layout,
+                ..stored
+            });
+        }
+        Ok(repaired)
     }
 }
 
@@ -404,6 +438,46 @@ mod tests {
         assert_eq!(stored.title, None);
         assert_eq!(stored.source, None);
         assert!(stored.mods.is_empty());
+
+        fs::remove_dir_all(&base)?;
+        Ok(())
+    }
+
+    /// Repair rebuilds a pre-enrichment sidecar from the stored files,
+    /// keeping the capture-time fields.
+    #[test]
+    fn repairs_meta_from_stored_files() -> Result<()> {
+        let base = std::env::temp_dir().join(format!("snapoid-modrepair-{}", std::process::id()));
+        let store = Store::open_at(&base)?;
+
+        let dir = store.mod_dir(88);
+        fs::create_dir_all(dir.join("mods/Test Mod/42.16"))?;
+        fs::write(
+            dir.join("mods/Test Mod/42.16/mod.info"),
+            "name=Test Mod\nid=TM\n",
+        )?;
+        fs::write(
+            dir.join("mod.json"),
+            r#"{ "id": 88, "time_updated": 7, "created": 8 }"#,
+        )?;
+
+        let repaired = store.repair_mod_meta()?;
+        assert_eq!(repaired.len(), 1);
+        assert_eq!(repaired[0].id, 88);
+        assert_eq!(repaired[0].time_updated, 7);
+        assert_eq!(repaired[0].created, 8);
+        assert_eq!(repaired[0].title, None);
+        assert_eq!(repaired[0].source, None);
+        assert_eq!(repaired[0].mods.len(), 1);
+        assert_eq!(repaired[0].mods[0].mod_id.as_deref(), Some("TM"));
+        assert_eq!(repaired[0].mods[0].inferred_min.as_deref(), Some("42.16"));
+        assert_eq!(repaired[0].layout, Some(Layout::B42));
+
+        // The sidecar on disk now carries the derived data too.
+        assert_eq!(store.stored_mod(88)?.unwrap().mods.len(), 1);
+
+        // Idempotent.
+        assert_eq!(store.repair_mod_meta()?.len(), 1);
 
         fs::remove_dir_all(&base)?;
         Ok(())
