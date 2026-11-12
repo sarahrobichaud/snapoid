@@ -1,4 +1,4 @@
-//! Metadata sidecars (game.json / instance.json).
+//! Metadata sidecars (game.json / instance.json / mod.json).
 
 use std::fs;
 use std::path::Path;
@@ -16,6 +16,17 @@ pub struct GameMeta {
     pub buildid: Option<u64>,
     #[serde(default)]
     pub manifest: Option<u64>,
+    /// Unix seconds at creation time.
+    pub created: u64,
+}
+
+/// Sidecar of a stored workshop mod.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ModMeta {
+    pub id: u64,
+    /// Steam's timeupdated for the item at capture time; 0 when unknown.
+    #[serde(default)]
+    pub time_updated: u64,
     /// Unix seconds at creation time.
     pub created: u64,
 }

@@ -19,3 +19,4 @@ pub mod scanner;
 pub mod steam;
 pub mod steamcmd;
 pub mod store;
+pub mod workshop;

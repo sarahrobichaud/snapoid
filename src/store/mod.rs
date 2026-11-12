@@ -9,6 +9,8 @@
 //!   <root>/instance/<name>/    a named instance whose game/ folder is a
 //!                              link into ../../game/<version>, with an
 //!                              instance.json sidecar
+//!   <root>/.store/mods/<id>/   stored workshop items (with the mods
+//!                              they bundle), with a mod.json sidecar
 //!
 //! Multiple instances can share one version. Under WSL the store moves to
 //! the Windows side, on the same drive as the game install
@@ -18,6 +20,7 @@
 pub mod games;
 pub mod instances;
 pub mod meta;
+pub mod mods;
 pub mod snapshots;
 
 use std::fs;
@@ -31,6 +34,7 @@ use crate::{info, warn};
 
 pub use games::StoredGame;
 pub use instances::GameInstance;
+pub use mods::StoredMod;
 pub use snapshots::SnapshotRef;
 
 /// Store errors callers may want to match on.
@@ -85,7 +89,11 @@ impl Store {
     pub fn open(root: &Path) -> Result<Self> {
         fs::create_dir_all(root)
             .with_context(|| format!("creating store root {}", root.display()))?;
-        for dir in [Self::games_dir_in(root), Self::instances_dir_in(root)] {
+        for dir in [
+            Self::games_dir_in(root),
+            Self::instances_dir_in(root),
+            Self::mods_dir_in(root),
+        ] {
             fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
         }
         info!("store at {}", root.display());
@@ -111,6 +119,10 @@ impl Store {
         root.join("instance")
     }
 
+    fn mods_dir_in(root: &Path) -> PathBuf {
+        root.join(".store/mods")
+    }
+
     /// Directory holding all stored game versions.
     pub fn games_dir(&self) -> PathBuf {
         Self::games_dir_in(&self.root)
@@ -121,6 +133,11 @@ impl Store {
         Self::instances_dir_in(&self.root)
     }
 
+    /// Directory holding all stored workshop mods.
+    pub fn mods_dir(&self) -> PathBuf {
+        Self::mods_dir_in(&self.root)
+    }
+
     /// Directory of one stored game version: `game/<version>/`.
     pub fn game_dir(&self, version: &str) -> PathBuf {
         self.games_dir().join(sanitize_name(version))
@@ -129,5 +146,10 @@ impl Store {
     /// Directory of one game instance: `instance/<name>/`.
     pub fn instance_dir(&self, name: &str) -> PathBuf {
         self.instances_dir().join(sanitize_name(name))
+    }
+
+    /// Directory of one stored workshop mod: `mods/<id>/`.
+    pub fn mod_dir(&self, id: u64) -> PathBuf {
+        self.mods_dir().join(id.to_string())
     }
 }

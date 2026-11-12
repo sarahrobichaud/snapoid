@@ -3,8 +3,8 @@
 
 mod auth;
 mod instance;
+mod mods;
 mod paths;
-mod scan;
 mod steamcmd;
 mod version;
 
@@ -27,8 +27,11 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// List installed workshop items and the mods they contain
-    Scan,
+    /// Manage workshop mods
+    Mods {
+        #[command(subcommand)]
+        command: mods::ModsCommand,
+    },
     /// Manage stored game versions (game files per version)
     Version {
         #[command(subcommand)]
@@ -63,7 +66,7 @@ pub fn run() -> anyhow::Result<()> {
     let cli = Cli::parse();
     logger::init(logger::Level::Info);
     match cli.command {
-        Commands::Scan => scan::run(),
+        Commands::Mods { command } => mods::run(command),
         Commands::Version { command } => version::run(command),
         Commands::Instance { command } => instance::run(command),
         Commands::Auth { command } => auth::run(command),

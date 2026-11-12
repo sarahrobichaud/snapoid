@@ -7,7 +7,7 @@ use snapoid::pz::probe::GameVersionInfo;
 use snapoid::registry::Registry;
 use snapoid::scanner::workshop::{ModEntry, WorkshopItem};
 use snapoid::steam::SteamPaths;
-use snapoid::store::{GameInstance, StoredGame};
+use snapoid::store::{GameInstance, StoredGame, StoredMod};
 
 /// Render the workshop inventory from `scan`.
 pub fn print_scan(items: &[WorkshopItem]) {
@@ -97,6 +97,12 @@ pub fn print_downloaded(downloaded: &Downloaded) {
         println!("  revision: {revision}");
     }
     println!("  path:     {}", downloaded.dir.display());
+}
+
+/// Render a freshly saved workshop mod.
+pub fn print_saved_mod(stored: &StoredMod) {
+    println!("mod {} saved", stored.id);
+    println!("  path: {}", stored.dir.display());
 }
 
 /// Render the list of stored game versions.
