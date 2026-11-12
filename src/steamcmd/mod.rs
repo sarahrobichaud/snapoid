@@ -1,5 +1,6 @@
-//! SteamCMD runner: locates the executable and runs it as a child
-//! process. This is the plumbing layer only; callers assemble the
+//! SteamCMD runner: locates the executable, runs it as a child
+//! process, and installs it in the first place ([`install`]). This is
+//! the plumbing layer only; callers assemble the
 //! steamcmd command line (`+force_install_dir`, `+login`, `+app_update`,
 //! `download_depot`, ...).
 //!
@@ -22,6 +23,8 @@ use anyhow::{Context as _, Result};
 use crate::config;
 use crate::debug;
 use crate::platform;
+
+pub mod install;
 
 /// A steamcmd executable that can be run or captured. The seam for
 /// faking steamcmd in tests.
@@ -121,6 +124,23 @@ pub fn locate() -> Result<PathBuf> {
         }
     }
 
+    // Any drive's steamcmd: the installer places it on the drive
+    // holding the game install, which is not necessarily C:.
+    if wsl {
+        if let Ok(entries) = std::fs::read_dir("/mnt") {
+            for entry in entries.flatten() {
+                candidates.push(entry.path().join("steamcmd/steamcmd.exe"));
+            }
+        }
+    } else if cfg!(windows) {
+        for letter in b'A'..=b'Z' {
+            candidates.push(PathBuf::from(format!(
+                "{}:\\steamcmd\\steamcmd.exe",
+                letter as char
+            )));
+        }
+    }
+
     candidates
         .into_iter()
         .find(|p| p.is_file())
@@ -142,9 +162,26 @@ fn run(program: &Path, args: &[String]) -> Result<()> {
         .status()
         .with_context(|| format!("running {}", program.display()))?;
     if !status.success() {
-        anyhow::bail!("steamcmd exited with {status}");
+        anyhow::bail!(ExitStatusError { status });
     }
     Ok(())
+}
+
+/// An error carrying the steamcmd exit status, so callers can recognize
+/// specific codes.
+#[derive(Debug, thiserror::Error)]
+#[error("steamcmd exited with {status}")]
+pub struct ExitStatusError {
+    pub status: std::process::ExitStatus,
+}
+
+/// True when the error is steamcmd's post-self-update restart request
+/// (exit code 7) — expected on the first run after a fresh install.
+pub fn is_update_restart(error: &anyhow::Error) -> bool {
+    error
+        .downcast_ref::<ExitStatusError>()
+        .and_then(|error| error.status.code())
+        .is_some_and(|code| code == 7)
 }
 
 fn capture(program: &Path, args: &[String]) -> Result<String> {

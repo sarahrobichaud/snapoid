@@ -1,8 +1,44 @@
-use snapoid::steamcmd::{self, SteamCmd as _};
+use std::path::PathBuf;
 
-/// Run steamcmd with the given arguments, or show the located binary when
-/// there are none.
-pub fn run(args: Vec<String>) -> anyhow::Result<()> {
+use clap::Subcommand;
+
+use snapoid::steamcmd::{self, install, SteamCmd as _};
+
+#[derive(Subcommand)]
+pub enum SteamcmdCommand {
+    /// Download steamcmd from the registry-listed package, verify its
+    /// checksum, and install it on the game's drive
+    Install {
+        /// Directory to install into (default: \steamcmd on the drive
+        /// holding the game install)
+        #[arg(long)]
+        to: Option<PathBuf>,
+    },
+}
+
+/// Run steamcmd with the given arguments, handle steamcmd management
+/// subcommands, or show the located binary when there are none.
+pub fn run(
+    command: Option<SteamcmdCommand>,
+    args: Vec<String>,
+) -> anyhow::Result<()> {
+    if let Some(command) = command {
+        return match command {
+            SteamcmdCommand::Install { to } => {
+                let exe = install::install(to.as_deref())?;
+                println!("steamcmd installed: {}", exe.display());
+                // Only the conventional <drive>:\steamcmd locations are
+                // discovered automatically; a custom one needs the env
+                // override.
+                if steamcmd::locate().map(|found| found != exe).unwrap_or(true) {
+                    println!("  snapoid will not find this copy on its own;");
+                    println!("  set SNAPOID_STEAMCMD to {}", exe.display());
+                }
+                println!("  log in once with: snapoid auth login <username>");
+                Ok(())
+            }
+        };
+    }
     let program = steamcmd::locate()?;
     if args.is_empty() {
         println!("steamcmd: {}", program.display());

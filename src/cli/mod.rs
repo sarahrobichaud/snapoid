@@ -46,8 +46,11 @@ enum Commands {
     },
     /// Show the resolved Steam and Project Zomboid paths
     Paths,
-    /// Run steamcmd with the given arguments
+    /// Run steamcmd with the given arguments, or manage the install
+    #[command(args_conflicts_with_subcommands = true)]
     Steamcmd {
+        #[command(subcommand)]
+        command: Option<steamcmd::SteamcmdCommand>,
         /// Arguments passed to steamcmd, e.g. `+app_info_print 380870 +quit`.
         /// With no arguments, just show the located steamcmd binary.
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
@@ -65,7 +68,7 @@ pub fn run() -> anyhow::Result<()> {
         Commands::Instance { command } => instance::run(command),
         Commands::Auth { command } => auth::run(command),
         Commands::Paths => paths::run(),
-        Commands::Steamcmd { args } => steamcmd::run(args),
+        Commands::Steamcmd { command, args } => steamcmd::run(command, args),
     }
 }
 
