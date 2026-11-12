@@ -2,5 +2,9 @@
   "builds": [
     { "version": "42.22.2", "manifest": 2378094061158458897, "depot": 108604, "buildid": 26486631 },
     { "version": "42.21.0", "manifest": 7544133343391543313, "depot": 108604, "buildid": 25485521 }
-  ]
+  ],
+  "steamcmd": {
+    "url": "https://client-update.steamstatic.com/installer/steamcmd.zip",
+    "sha256": "7669b170dee42db8ee2273775ed7dfb2d173bdba1b849f70d2c7b379290bce13"
+  }
 }
