@@ -7,6 +7,7 @@ pub mod deploy;
 pub mod download;
 pub mod fmt;
 pub mod fsops;
+pub mod launch;
 pub mod logger;
 pub mod parser;
 pub mod platform;

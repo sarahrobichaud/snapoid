@@ -141,8 +141,9 @@ pub fn print_instance(instance: &GameInstance) {
         "instance {} created (game version {})",
         instance.name, instance.version
     );
-    println!("  path: {}", instance.dir.display());
-    println!("  game: {}", instance.game_dir.display());
+    println!("  path:    {}", instance.dir.display());
+    println!("  game:    {}", instance.game_dir.display());
+    println!("  profile: {}", instance.profile_dir.display());
 }
 
 /// Render the list of game instances.
@@ -162,12 +163,50 @@ pub fn print_instances(instances: &[GameInstance]) {
         } else {
             "BROKEN LINK"
         };
+        let profile = profile_state(instance);
         println!(
-            "{}  (version {})  captured {}  game link {}",
-            instance.name, instance.version, captured, game
+            "{}  (version {})  captured {}  game link {}  profile {}",
+            instance.name, instance.version, captured, game, profile
         );
         println!("  {}", instance.dir.display());
     }
+}
+
+/// Profile state as displayed: fresh when empty or missing, in use
+/// otherwise.
+fn profile_state(instance: &GameInstance) -> &'static str {
+    let empty = instance
+        .profile_dir
+        .read_dir()
+        .map(|mut entries| entries.next().is_none())
+        .unwrap_or(true);
+    if empty { "fresh" } else { "in use" }
+}
+
+/// Render a launched instance: one line, since the game output is
+/// suppressed and snapoid now blocks until the game exits.
+pub fn print_launched(instance: &GameInstance) {
+    println!(
+        "instance {} launched — Ctrl+C or closing the terminal stops the game",
+        instance.name
+    );
+}
+
+/// Render the game's exit after a launch.
+pub fn print_exited(instance: &GameInstance, status: &std::process::ExitStatus) {
+    println!("instance {} exited ({status})", instance.name);
+    if !status.success() {
+        println!(
+            "  the game's output is suppressed; run its .bat in the game \
+             folder manually to see it"
+        );
+    }
+}
+
+/// Render a profile reset.
+pub fn print_reset(instance: &GameInstance) {
+    println!("instance {} profile reset to fresh", instance.name);
+    println!("  {}", instance.profile_dir.display());
 }
 
 /// Render the resolved Steam and Project Zomboid paths, grouped by

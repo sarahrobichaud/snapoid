@@ -13,7 +13,7 @@ use crate::store::{Error, Store};
 use crate::warn;
 
 /// A game instance: a named slot whose game folder links to a version.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct GameInstance {
     /// Instance name; also the name of its folder.
     pub name: String,
@@ -23,6 +23,10 @@ pub struct GameInstance {
     pub dir: PathBuf,
     /// The instance's linked game folder (instance/<name>/game).
     pub game_dir: PathBuf,
+    /// The instance's private profile (instance/<name>/profile): the
+    /// Zomboid user dir the game is pointed at via -cachedir. Empty =
+    /// fresh; the game generates its contents for its own version.
+    pub profile_dir: PathBuf,
     /// Unix seconds at creation time; 0 when unknown.
     pub created: u64,
 }
@@ -80,14 +84,52 @@ impl Store {
             },
         )?;
 
+        // An empty profile is a fresh game: the game populates it on
+        // first launch (see launch.rs for the -cachedir mechanism).
+        let profile_dir = dir.join("profile");
+        fs::create_dir_all(&profile_dir)
+            .with_context(|| format!("creating {}", profile_dir.display()))?;
+
         Ok(GameInstance {
             name: name.to_owned(),
             version: version.to_owned(),
             revision,
             dir,
             game_dir: link,
+            profile_dir,
             created,
         })
+    }
+
+    /// The named instance; Err when it does not exist.
+    pub fn instance(&self, name: &str) -> Result<GameInstance> {
+        let found = self
+            .list_instances()?
+            .into_iter()
+            .find(|instance| instance.name == name);
+        found.with_context(|| format!("no instance named {name}"))
+    }
+
+    /// Wipe the instance's profile back to fresh: remove the profile
+    /// directory and recreate it empty. The instance itself (game link,
+    /// metadata) is untouched.
+    pub fn instance_reset(&self, name: &str) -> Result<GameInstance> {
+        let instance = self.instance(name)?;
+        if instance.profile_dir.exists() {
+            fs::remove_dir_all(&instance.profile_dir).with_context(|| {
+                format!(
+                    "removing {} (is the game still running?)",
+                    instance.profile_dir.display()
+                )
+            })?;
+        }
+        fs::create_dir_all(&instance.profile_dir).with_context(|| {
+            format!(
+                "creating {}",
+                instance.profile_dir.display()
+            )
+        })?;
+        Ok(instance)
     }
 
     /// List stored game instances, sorted by name.
@@ -119,6 +161,7 @@ impl Store {
                     .unwrap_or_else(|| "unknown".to_owned()),
                 revision: instance_meta.as_ref().and_then(|m| m.revision.clone()),
                 game_dir: path.join("game"),
+                profile_dir: path.join("profile"),
                 dir: path,
                 created: instance_meta.as_ref().map(|m| m.created).unwrap_or(0),
             });
@@ -147,10 +190,25 @@ mod tests {
         assert!(instance.game_dir.is_dir(), "game link should resolve");
         assert!(instance.game_dir.join("projectzomboid.jar").is_file());
         assert!(instance.dir.join("instance.json").is_file());
+        assert!(instance.profile_dir.is_dir(), "profile should exist");
+        assert!(instance
+            .profile_dir
+            .read_dir()
+            .map(|mut entries| entries.next().is_none())
+            .unwrap_or(false), "fresh profile should be empty");
 
         // Unknown versions and duplicate names are rejected.
         assert!(store.instance_new("bad", "0.0").is_err());
         assert!(store.instance_new("survivor", "42.22.2").is_err());
+
+        // Reset wipes the profile contents but keeps the instance.
+        fs::write(instance.profile_dir.join("options.ini"), "x")?;
+        let reset = store.instance_reset("survivor")?;
+        assert!(reset.profile_dir.is_dir());
+        assert!(!reset.profile_dir.join("options.ini").exists());
+        assert!(reset.dir.join("instance.json").is_file());
+        assert!(reset.game_dir.join("projectzomboid.jar").is_file());
+        assert!(store.instance_reset("nope").is_err());
 
         fs::remove_dir_all(&base)?;
         Ok(())

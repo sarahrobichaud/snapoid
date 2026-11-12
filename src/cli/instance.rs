@@ -16,6 +16,23 @@ pub enum InstanceCommand {
     },
     /// List stored game instances
     List,
+    /// Launch the game for an instance, with its own private profile
+    Launch {
+        /// Instance name
+        name: String,
+        /// Launch the dedicated server instead of the client
+        #[arg(long)]
+        server: bool,
+        /// Disable Steam integration
+        #[arg(long)]
+        nosteam: bool,
+        /// Server admin password; on the server's first launch it
+        /// defaults to 'snapoid', passing this changes it
+        #[arg(long)]
+        admin_password: Option<String>,
+    },
+    /// Reset an instance profile to fresh (deletes saves, settings, mods)
+    Reset { name: String },
 }
 
 pub fn run(command: InstanceCommand) -> anyhow::Result<()> {
@@ -54,6 +71,29 @@ pub fn run(command: InstanceCommand) -> anyhow::Result<()> {
             let store = open_store()?;
             let instances = store.list_instances()?;
             report::print_instances(&instances);
+        }
+        InstanceCommand::Launch {
+            name,
+            server,
+            nosteam,
+            admin_password,
+        } => {
+            let store = open_store()?;
+            let instance = store.instance(&name)?;
+            let options = snapoid::launch::LaunchOptions {
+                server,
+                nosteam,
+                admin_password,
+            };
+            let plan = snapoid::launch::plan(&instance, &options)?;
+            report::print_launched(&instance);
+            let status = snapoid::launch::run(&plan)?;
+            report::print_exited(&instance, &status);
+        }
+        InstanceCommand::Reset { name } => {
+            let store = open_store()?;
+            let instance = store.instance_reset(&name)?;
+            report::print_reset(&instance);
         }
     }
     Ok(())
