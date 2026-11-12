@@ -1,5 +1,8 @@
 use clap::Subcommand;
 
+use snapoid::store::Store;
+
+use super::instance_mods;
 use super::open_store;
 use crate::report;
 use crate::ui;
@@ -16,10 +19,8 @@ pub enum InstanceCommand {
     },
     /// List stored game instances
     List,
-    /// Launch the game for an instance, with its own private profile
+    /// Launch the game for the instance, with its own private profile
     Launch {
-        /// Instance name
-        name: String,
         /// Launch the dedicated server instead of the client
         #[arg(long)]
         server: bool,
@@ -31,13 +32,18 @@ pub enum InstanceCommand {
         #[arg(long)]
         admin_password: Option<String>,
     },
-    /// Reset an instance profile to fresh (deletes saves, settings, mods)
-    Reset { name: String },
+    /// Reset the instance profile to fresh (deletes saves, settings, mods)
+    Reset,
+    /// Manage the stored mods of the instance
+    Mods {
+        #[command(subcommand)]
+        command: instance_mods::InstanceModsCommand,
+    },
 }
 
-pub fn run(command: InstanceCommand) -> anyhow::Result<()> {
+pub fn run(name: Option<String>, command: Option<InstanceCommand>) -> anyhow::Result<()> {
     match command {
-        InstanceCommand::New { name, version } => {
+        Some(InstanceCommand::New { name, version }) => {
             let store = open_store()?;
             let games = store.list_games()?;
             let version = match version {
@@ -67,18 +73,18 @@ pub fn run(command: InstanceCommand) -> anyhow::Result<()> {
             let instance = store.instance_new(&name, &version)?;
             report::print_instance(&instance);
         }
-        InstanceCommand::List => {
+        Some(InstanceCommand::List) => {
             let store = open_store()?;
             let instances = store.list_instances()?;
             report::print_instances(&instances);
         }
-        InstanceCommand::Launch {
-            name,
+        Some(InstanceCommand::Launch {
             server,
             nosteam,
             admin_password,
-        } => {
+        }) => {
             let store = open_store()?;
+            let name = resolve_name(&store, name)?;
             let instance = store.instance(&name)?;
             let options = snapoid::launch::LaunchOptions {
                 server,
@@ -90,11 +96,48 @@ pub fn run(command: InstanceCommand) -> anyhow::Result<()> {
             let status = snapoid::launch::run(&plan)?;
             report::print_exited(&instance, &status);
         }
-        InstanceCommand::Reset { name } => {
+        Some(InstanceCommand::Reset) => {
             let store = open_store()?;
+            let name = resolve_name(&store, name)?;
             let instance = store.instance_reset(&name)?;
             report::print_reset(&instance);
         }
+        Some(InstanceCommand::Mods { command }) => instance_mods::run(name, command)?,
+        None => match name {
+            // `instance <name>`: show the instance's details.
+            Some(name) => {
+                let store = open_store()?;
+                let instance = store.instance(&name)?;
+                report::print_instances(std::slice::from_ref(&instance));
+            }
+            None => anyhow::bail!(
+                "nothing to do; try `snapoid instance list`, \
+                 `snapoid instance new <name>`, or `snapoid instance <name> launch`"
+            ),
+        },
     }
     Ok(())
+}
+
+/// Resolve the instance to act on: the explicit name, else an
+/// interactive picker.
+pub(crate) fn resolve_name(store: &Store, name: Option<String>) -> anyhow::Result<String> {
+    match name {
+        Some(name) => Ok(name),
+        None => pick_instance(store),
+    }
+}
+
+/// Interactive instance picker, used when the name is omitted.
+fn pick_instance(store: &Store) -> anyhow::Result<String> {
+    let instances = store.list_instances()?;
+    if instances.is_empty() {
+        anyhow::bail!("no game instances stored; create one with `snapoid instance new`");
+    }
+    let items: Vec<String> = instances
+        .iter()
+        .map(|instance| format!("{}  (version {})", instance.name, instance.version))
+        .collect();
+    let index = ui::pick(&items, "Pick instance", 0)?;
+    Ok(instances[index].name.clone())
 }

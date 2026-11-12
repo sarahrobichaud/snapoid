@@ -128,6 +128,42 @@ impl Store {
         })
     }
 
+    /// All stored workshop items, sorted by id. An entry with a missing
+    /// or unreadable meta is still listed (times 0), so a damaged
+    /// mod.json does not hide the mod.
+    pub fn list_mods(&self) -> Result<Vec<StoredMod>> {
+        let dir = self.mods_dir();
+        if !dir.is_dir() {
+            return Ok(Vec::new());
+        }
+
+        let mut mods = Vec::new();
+        for entry in fs::read_dir(&dir).with_context(|| format!("reading {}", dir.display()))? {
+            let entry = entry.with_context(|| format!("reading {}", dir.display()))?;
+            let path = entry.path();
+            if !path.is_dir()
+                || path
+                    .file_name()
+                    .is_some_and(|n| n.to_string_lossy().starts_with('.'))
+            {
+                continue;
+            }
+            let Ok(id) = entry.file_name().to_string_lossy().parse::<u64>() else {
+                continue;
+            };
+            let mod_meta = meta::read::<ModMeta>(&path.join("mod.json")).ok().flatten();
+            mods.push(StoredMod {
+                id,
+                time_updated: mod_meta.as_ref().map(|m| m.time_updated).unwrap_or(0),
+                dir: path,
+                created: mod_meta.map(|m| m.created).unwrap_or(0),
+            });
+        }
+
+        mods.sort_by_key(|m| m.id);
+        Ok(mods)
+    }
+
     /// The stored copy of one workshop item, if any. A missing or
     /// unreadable meta counts as not stored, so a re-save can repair it.
     pub fn stored_mod(&self, id: u64) -> Result<Option<StoredMod>> {
@@ -175,6 +211,38 @@ mod tests {
         );
         assert_eq!(store.stored_mod(123)?.unwrap().time_updated, 1_700_000_100);
         assert!(store.stored_mod(456)?.is_none());
+
+        fs::remove_dir_all(&base)?;
+        Ok(())
+    }
+
+    #[test]
+    fn lists_stored_mods() -> Result<()> {
+        let base = std::env::temp_dir().join(format!("snapoid-modlist-{}", std::process::id()));
+        let store = Store::open_at(&base)?;
+        assert!(store.list_mods()?.is_empty());
+
+        let from = base.join("workshop/456");
+        fs::create_dir_all(from.join("mods/Test Mod"))?;
+        fs::write(from.join("mods/Test Mod/mod.info"), "mod")?;
+        store.save_mod_copy(&from, 456, 1_700_000_000, noop_progress)?;
+        fs::create_dir_all(base.join("cache/123"))?;
+        store.adopt_mod_dir(&base.join("cache/123"), 123, 1_700_000_100)?;
+
+        // Staging and retired dirs are dot-prefixed and never listed.
+        fs::create_dir_all(store.mods_dir().join(".staging-789"))?;
+
+        let mods = store.list_mods()?;
+        let ids: Vec<u64> = mods.iter().map(|m| m.id).collect();
+        assert_eq!(ids, vec![123, 456]);
+        assert_eq!(mods[0].time_updated, 1_700_000_100);
+        assert_eq!(mods[1].time_updated, 1_700_000_000);
+
+        // A damaged meta still lists the mod, with unknown times.
+        fs::write(store.mod_dir(123).join("mod.json"), "not json")?;
+        let mods = store.list_mods()?;
+        assert_eq!(mods[0].id, 123);
+        assert_eq!(mods[0].time_updated, 0);
 
         fs::remove_dir_all(&base)?;
         Ok(())

@@ -5,7 +5,7 @@
 use std::io::IsTerminal;
 
 use anyhow::Result;
-use dialoguer::Select;
+use dialoguer::{MultiSelect, Select};
 use indicatif::{ProgressBar, ProgressStyle};
 
 use snapoid::fsops;
@@ -33,6 +33,27 @@ pub fn pick(items: &[String], prompt: &str, default: usize) -> Result<usize> {
         .interact_opt()?;
     match selection {
         Some(index) => Ok(index),
+        None => anyhow::bail!("not an interactive terminal; pass an explicit value instead"),
+    }
+}
+
+/// Print `items` as an interactive checklist and read the toggled
+/// entries from the terminal. Space toggles an entry, Enter confirms;
+/// the returned indexes are in menu order and may be empty. Same
+/// terminal requirement as [`pick`].
+pub fn multi_pick(items: &[String], prompt: &str) -> Result<Vec<usize>> {
+    if items.is_empty() {
+        anyhow::bail!("nothing to pick from");
+    }
+    if !std::io::stdin().is_terminal() {
+        anyhow::bail!("not an interactive terminal; pass an explicit value instead");
+    }
+    let selection = MultiSelect::new()
+        .with_prompt(prompt)
+        .items(items)
+        .interact_opt()?;
+    match selection {
+        Some(indexes) => Ok(indexes),
         None => anyhow::bail!("not an interactive terminal; pass an explicit value instead"),
     }
 }

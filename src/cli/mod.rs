@@ -3,6 +3,7 @@
 
 mod auth;
 mod instance;
+mod instance_mods;
 mod mods;
 mod paths;
 mod steamcmd;
@@ -39,8 +40,11 @@ enum Commands {
     },
     /// Manage game instances
     Instance {
+        /// Instance name, when running a per-instance action
+        #[arg(value_name = "NAME")]
+        name: Option<String>,
         #[command(subcommand)]
-        command: instance::InstanceCommand,
+        command: Option<instance::InstanceCommand>,
     },
     /// Manage the remembered steamcmd account
     Auth {
@@ -68,7 +72,7 @@ pub fn run() -> anyhow::Result<()> {
     match cli.command {
         Commands::Mods { command } => mods::run(command),
         Commands::Version { command } => version::run(command),
-        Commands::Instance { command } => instance::run(command),
+        Commands::Instance { name, command } => instance::run(name, command),
         Commands::Auth { command } => auth::run(command),
         Commands::Paths => paths::run(),
         Commands::Steamcmd { command, args } => steamcmd::run(command, args),
