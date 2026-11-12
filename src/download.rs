@@ -57,8 +57,9 @@ pub struct DownloadRequest {
 pub enum Error {
     #[error(
         "game downloads need a Steam account that owns Project Zomboid; \
-         pass --login <username> (steamcmd prompts for the password, \
-         or reuses its cached credentials)"
+         run `snapoid auth login <username>` once, or pass --login \
+         <username> (steamcmd prompts for the password, or reuses its \
+         cached credentials)"
     )]
     LoginRequired,
 }

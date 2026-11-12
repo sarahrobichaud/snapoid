@@ -2,6 +2,7 @@
 //! mods. The binary (`main.rs`) owns the CLI, rendering, and terminal
 //! UI; this crate owns everything else.
 
+pub mod auth;
 pub mod config;
 pub mod deploy;
 pub mod download;

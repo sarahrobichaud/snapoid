@@ -1,6 +1,7 @@
 //! CLI layer: argument definitions and thin handlers that compose library
 //! entry points.
 
+mod auth;
 mod instance;
 mod paths;
 mod scan;
@@ -38,6 +39,11 @@ enum Commands {
         #[command(subcommand)]
         command: instance::InstanceCommand,
     },
+    /// Manage the remembered steamcmd account
+    Auth {
+        #[command(subcommand)]
+        command: auth::AuthCommand,
+    },
     /// Show the resolved Steam and Project Zomboid paths
     Paths,
     /// Run steamcmd with the given arguments
@@ -57,6 +63,7 @@ pub fn run() -> anyhow::Result<()> {
         Commands::Scan => scan::run(),
         Commands::Version { command } => version::run(command),
         Commands::Instance { command } => instance::run(command),
+        Commands::Auth { command } => auth::run(command),
         Commands::Paths => paths::run(),
         Commands::Steamcmd { args } => steamcmd::run(args),
     }

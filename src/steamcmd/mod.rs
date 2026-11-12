@@ -195,6 +195,32 @@ pub fn reports_success(output: &str) -> bool {
     false
 }
 
+/// Heuristic success check for a captured `+login <name> +quit`. The
+/// verdict follows the last `Logging in user` line: success ends in `OK`
+/// (`... to Steam Public...OK`), failure prints `ERROR (Invalid
+/// Password)` on current steamcmd or `FAILED login with result code
+/// ...` on older ones — on the same line or the next one. Later `OK`
+/// lines (`Unloading Steam API...OK`) must not mask a failure, and no
+/// verdict at all (a hung Steam Guard prompt) counts as failure.
+pub fn login_ok(output: &str) -> bool {
+    let Some(start) = output.rfind("Logging in user") else {
+        return false;
+    };
+    for line in output[start..].lines() {
+        let line = line.trim_end();
+        if line.contains("ERROR (")
+            || line.contains("FAILED login")
+            || line.contains("Error!")
+        {
+            return false;
+        }
+        if line.ends_with("OK") {
+            return true;
+        }
+    }
+    false
+}
+
 /// Search `PATH` for `name`, returning the first match that is a file.
 fn from_path(name: &str) -> Option<PathBuf> {
     let path = std::env::var_os("PATH")?;
@@ -218,6 +244,56 @@ mod tests {
         let both = "Success! App '380870' already up to date.\nError! No subscription";
         assert!(!reports_success(both));
         assert!(!reports_success("no verdict at all"));
+    }
+
+    #[test]
+    fn parses_login_verdicts() {
+        // Real success output (cached credentials), as steamcmd prints
+        // it after its self-update relaunch.
+        let ok = "\
+Steam Console Client (c) Valve Corporation - version 1794425457
+Loading Steam API...OK
+Logging in using cached credentials.
+Logging in user 'gordon' [U:1:1234567] to Steam Public...OK
+Waiting for client config...OK
+Waiting for user info...OK
+Unloading Steam API...OK";
+        assert!(login_ok(ok));
+        // Verdict on its own line after the login line.
+        assert!(login_ok(
+            "Loading Steam API...OK\nLogging in user 'x' to Steam Public ...\nOK"
+        ));
+        // Real failure output (cached credentials cleared), as
+        // steamcmd prints it: the verdict is `ERROR (...)`, and the
+        // trailing `Unloading Steam API...OK` must not mask it.
+        let failed = "\
+Loading Steam API...OK
+Cached credentials not found.
+password:
+Proceeding with login using username/password.
+Logging in user 'gordon' [U:1:1234567] to Steam Public...
+ERROR (Invalid Password)
+Unloading Steam API...OK";
+        assert!(!login_ok(failed));
+        assert!(!login_ok(
+            "Logging in user 'x' to Steam Public...ERROR (Invalid Password)"
+        ));
+        // Older steamcmd failure format.
+        assert!(!login_ok(
+            "Logging in user 'x' to Steam Public ...\nFAILED login with result code Invalid Password (2)"
+        ));
+        assert!(!login_ok(
+            "Logging in user 'x' to Steam Public...FAILED login with result code Invalid Password"
+        ));
+        // The last login attempt wins: a failed retry after an earlier
+        // success must count as a failure.
+        let retried = "\
+Logging in user 'x' to Steam Public...OK
+Logging in user 'x' to Steam Public ...\nFAILED login with result code Expired";
+        assert!(!login_ok(retried));
+        // Earlier OK lines (Steam API loading) do not count.
+        assert!(!login_ok("Loading Steam API...OK\nnothing else happened"));
+        assert!(!login_ok("no login attempt at all"));
     }
 
     /// Tolerant smoke test: on machines with steamcmd installed, locate()

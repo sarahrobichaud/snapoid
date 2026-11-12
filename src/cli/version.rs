@@ -2,6 +2,7 @@ use std::path::PathBuf;
 
 use clap::Subcommand;
 
+use snapoid::auth;
 use snapoid::download::{self, DownloadRequest};
 use snapoid::pz::{self, probe};
 use snapoid::registry;
@@ -33,7 +34,8 @@ pub enum VersionCommand {
     Download {
         /// Version to download (see `version available`), or "latest"
         version: String,
-        /// Steam account name for steamcmd (password prompted by steamcmd)
+        /// Steam account name for steamcmd (default: the account
+        /// remembered by `snapoid auth login`)
         #[arg(short, long)]
         login: Option<String>,
         /// Depot ID override (default: the registry entry's depot, else
@@ -105,6 +107,8 @@ pub fn run(command: VersionCommand) -> anyhow::Result<()> {
             let root = store::locate_root(paths.as_ref().and_then(|p| p.game_dir.as_deref()))?;
             let store = Store::open(&root)?;
             let cmd = steamcmd::Process::new(program);
+            // Fall back to the account remembered by `snapoid auth login`.
+            let login = login.or_else(|| auth::load(&root));
             let downloaded = download::download(
                 &store,
                 &cmd,
