@@ -182,23 +182,30 @@ mod tests {
         assert_eq!(items[0].time_updated, 0);
         assert_eq!(items[0].mods.len(), 1);
         assert_eq!(items[0].mods[0].name, "Disk Only");
-        assert_eq!(items[0].mods[0].version_min, None);
-        assert_eq!(items[0].mods[0].version_max, None);
+        // B41 shape: root manifest only, no version folders.
+        assert!(items[0].mods[0].folders.is_empty());
+        assert!(items[0].mods[0].root.is_some());
 
         assert_eq!(items[1].id, 123456789);
         assert_eq!(items[1].time_updated, 1_700_000_000);
         assert_eq!(items[1].mods.len(), 3);
 
         assert_eq!(items[1].mods[0].name, "B42 Mod");
-        assert_eq!(items[1].mods[0].version_min.as_deref(), Some("42.16.0"));
-        assert_eq!(items[1].mods[0].version_max.as_deref(), Some("42.99.0"));
+        let folders = &items[1].mods[0].folders;
+        assert_eq!(folders.len(), 2);
+        assert_eq!(folders[0].name, "42.16");
+        assert_eq!(folders[0].min.as_deref(), Some("42.16.0"));
+        assert_eq!(folders[1].name, "42.22");
+        assert_eq!(folders[1].min.as_deref(), Some("42.22.0"));
+        assert_eq!(folders[1].max.as_deref(), Some("42.99.0"));
 
         assert_eq!(items[1].mods[1].name, "Hybrid Mod");
-        assert_eq!(items[1].mods[1].version_min.as_deref(), Some("42.5.0"));
-        assert_eq!(items[1].mods[1].version_max, None);
+        assert_eq!(items[1].mods[1].folders.len(), 1);
+        assert_eq!(items[1].mods[1].folders[0].min.as_deref(), Some("42.5.0"));
+        assert!(items[1].mods[1].root.is_some());
 
         assert_eq!(items[1].mods[2].name, "Test Mod");
-        assert_eq!(items[1].mods[2].version_min, None);
-        assert_eq!(items[1].mods[2].version_max, None);
+        assert!(items[1].mods[2].folders.is_empty());
+        assert!(items[1].mods[2].root.is_some());
     }
 }

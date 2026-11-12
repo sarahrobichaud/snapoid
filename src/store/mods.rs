@@ -303,7 +303,9 @@ mod tests {
         assert_eq!(stored.source, Some(Source::WorkshopDisk));
         assert_eq!(stored.mods.len(), 1);
         assert_eq!(stored.mods[0].mod_id.as_deref(), Some("TM"));
-        assert_eq!(stored.mods[0].version_min.as_deref(), Some("42.16"));
+        // The manifest sits at the mod root (B41 shape), so its range
+        // is the root manifest's.
+        assert_eq!(stored.mods[0].root.as_ref().unwrap().min.as_deref(), Some("42.16"));
         assert_eq!(stored.mods[0].requires, vec!["Lib", "Other"]);
         assert_eq!(stored.layout, Some(Layout::B41));
         assert!(stored.dir.join("mods/Test Mod/mod.info").is_file());
@@ -470,7 +472,8 @@ mod tests {
         assert_eq!(repaired[0].source, None);
         assert_eq!(repaired[0].mods.len(), 1);
         assert_eq!(repaired[0].mods[0].mod_id.as_deref(), Some("TM"));
-        assert_eq!(repaired[0].mods[0].inferred_min.as_deref(), Some("42.16"));
+        assert_eq!(repaired[0].mods[0].folders[0].name, "42.16");
+        assert_eq!(repaired[0].mods[0].folders[0].version, 42_016);
         assert_eq!(repaired[0].layout, Some(Layout::B42));
 
         // The sidecar on disk now carries the derived data too.

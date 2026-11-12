@@ -87,6 +87,7 @@ pub fn write<T: Serialize>(path: &Path, meta: &T) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::pz::item::FolderRange;
 
     /// Sidecars written before the enriched mod metadata must keep
     /// parsing: every added field defaults.
@@ -119,9 +120,14 @@ mod tests {
                 mod_id: Some("TM".to_owned()),
                 title: Some("Test Mod".to_owned()),
                 author: Some("Someone".to_owned()),
-                version_min: Some("42.16".to_owned()),
-                version_max: None,
-                inferred_min: Some("42.16".to_owned()),
+                folders: vec![FolderRange {
+                    version: 42_016,
+                    name: "42.16".to_owned(),
+                    min: Some("42.16".to_owned()),
+                    max: None,
+                }],
+                common: None,
+                root: None,
                 requires: vec!["Lib".to_owned()],
                 incompatible: Vec::new(),
                 load_before: Vec::new(),
@@ -138,7 +144,8 @@ mod tests {
         assert_eq!(parsed.mods.len(), 1);
         assert_eq!(parsed.mods[0].mod_id.as_deref(), Some("TM"));
         assert_eq!(parsed.mods[0].requires, vec!["Lib"]);
-        assert_eq!(parsed.mods[0].inferred_min.as_deref(), Some("42.16"));
+        assert_eq!(parsed.mods[0].folders[0].min.as_deref(), Some("42.16"));
+        assert_eq!(parsed.mods[0].folders[0].version, 42_016);
         assert_eq!(parsed.mods[0].layout, Layout::B42);
         assert_eq!(parsed.layout, Some(Layout::B42));
     }

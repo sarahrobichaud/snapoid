@@ -1,6 +1,7 @@
 use clap::Subcommand;
 
 use snapoid::fmt;
+use snapoid::pz::compat::{self, Compatibility, Incompatibility};
 use snapoid::store::StoredMod;
 
 use super::open_store;
@@ -18,8 +19,8 @@ pub fn run(name: Option<String>, command: InstanceModsCommand) -> anyhow::Result
     }
 }
 
-/// Show the stored mods as a checklist and confirm the selection. The
-/// install step itself is not wired up yet.
+/// Show the compatible stored mods as a checklist and confirm the
+/// selection. The install step itself is not wired up yet.
 fn install(name: Option<String>) -> anyhow::Result<()> {
     let store = open_store()?;
     let name = super::instance::resolve_name(&store, name)?;
@@ -30,7 +31,43 @@ fn install(name: Option<String>) -> anyhow::Result<()> {
         return Ok(());
     }
 
-    let items: Vec<String> = mods.iter().map(describe_mod).collect();
+    // Only items whose bundled mods load on the instance's game
+    // version make the checklist; the rest are reported with reasons.
+    let mut compatible: Vec<&StoredMod> = Vec::new();
+    let mut excluded: Vec<(&StoredMod, Incompatibility)> = Vec::new();
+    let mut unknown = 0usize;
+    for item in &mods {
+        match compat::item_compatibility(&item.mods, &instance.version) {
+            Compatibility::Compatible => compatible.push(item),
+            Compatibility::Incompatible(reason) => excluded.push((item, reason)),
+            Compatibility::Unknown => unknown += 1,
+        }
+    }
+
+    if !excluded.is_empty() {
+        println!("Not compatible with version {}:", instance.version);
+        for (item, reason) in &excluded {
+            println!("  {}  {}  — {reason}", item.id, item_label(item));
+        }
+    }
+    if unknown > 0 {
+        println!(
+            "{unknown} stored item(s) have unknown compatibility and are not shown."
+        );
+    }
+    if !excluded.is_empty() || unknown > 0 {
+        println!();
+    }
+
+    if compatible.is_empty() {
+        println!(
+            "No stored mods are compatible with version {}.",
+            instance.version
+        );
+        return Ok(());
+    }
+
+    let items: Vec<String> = compatible.iter().map(|m| describe_mod(m)).collect();
     let picked = ui::multi_pick(
         &items,
         &format!(
@@ -53,6 +90,19 @@ fn install(name: Option<String>) -> anyhow::Result<()> {
         println!("  {}", items[index]);
     }
     Ok(())
+}
+
+/// A short label for a stored item: its title, else its first bundled
+/// mod's name.
+fn item_label(item: &StoredMod) -> String {
+    item.title
+        .clone()
+        .or_else(|| {
+            item.mods
+                .first()
+                .map(|m| m.title.clone().unwrap_or_else(|| m.name.clone()))
+        })
+        .unwrap_or_else(|| "(no mods)".to_owned())
 }
 
 /// One checklist row: workshop item id, the mods it bundles (from the

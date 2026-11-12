@@ -5,9 +5,10 @@ use std::cmp::Ordering;
 
 use snapoid::download::Downloaded;
 use snapoid::fmt;
+use snapoid::pz::compat;
 use snapoid::pz::item::Layout;
 use snapoid::pz::probe::GameVersionInfo;
-use snapoid::pz::version::Version;
+use snapoid::pz::version;
 use snapoid::registry::Registry;
 use snapoid::scanner::workshop::{ModEntry, WorkshopItem};
 use snapoid::steam::SteamPaths;
@@ -147,10 +148,10 @@ fn source_text(source: Source) -> &'static str {
     }
 }
 
-/// Legend for inferred ranges, shown only when any were displayed.
+/// Legend for structural coverage, shown only when any was displayed.
 fn inferred_legend(count: usize) -> String {
     if count > 0 {
-        " (~ = inferred from folder names)".to_owned()
+        " (~ = would load, not author-declared)".to_owned()
     } else {
         String::new()
     }
@@ -274,14 +275,81 @@ impl LayoutTally {
     }
 }
 
-/// The declared version range of a mod, as displayed. Unbounded ends
-/// are shown as unknown, not as compatible. This is the only range an
-/// external source (workshop) listing shows.
+/// The declared version coverage of a mod, as displayed — the intervals
+/// where an author-declared range makes the mod available. External
+/// sources (workshop) show declared constraints only; folder-structure
+/// coverage is a store-listing concern.
 fn declared_range(mod_entry: &ModEntry) -> String {
-    let min = mod_entry.version_min.as_deref();
-    let max = mod_entry.version_max.as_deref();
+    let intervals = compat::available_intervals(mod_entry);
+    let declared: Vec<&compat::Availability> = intervals
+        .iter()
+        .filter(|interval| interval.tier == compat::Tier::Declared)
+        .collect();
+    if !declared.is_empty() {
+        return render_intervals(&declared);
+    }
+    // No B42 availability: a B41-only mod's root manifest range is all
+    // it declares.
+    if mod_entry
+        .root
+        .as_ref()
+        .is_some_and(|root| root.min.is_some() || root.max.is_some())
+    {
+        let root = mod_entry.root.as_ref().unwrap();
+        return ends_range(root.min.as_deref(), root.max.as_deref());
+    }
+    "-".to_owned()
+}
+
+/// The version range of a stored mod, as displayed: every availability
+/// interval, with structural coverage (the game would load it, but no
+/// manifest declares it) prefixed with ~ — a tier below a declared
+/// constraint.
+fn version_range(mod_entry: &ModEntry) -> String {
+    let intervals = compat::available_intervals(mod_entry);
+    if !intervals.is_empty() {
+        let all: Vec<&compat::Availability> = intervals.iter().collect();
+        return render_intervals(&all);
+    }
+    if mod_entry
+        .root
+        .as_ref()
+        .is_some_and(|root| root.min.is_some() || root.max.is_some())
+    {
+        let root = mod_entry.root.as_ref().unwrap();
+        return ends_range(root.min.as_deref(), root.max.as_deref());
+    }
+    "-".to_owned()
+}
+
+fn render_intervals(intervals: &[&compat::Availability]) -> String {
+    intervals
+        .iter()
+        .map(|interval| {
+            let range = match interval.end {
+                Some(end) if interval.start == end => version::int_text(interval.start),
+                Some(end) => format!(
+                    "{} - {}",
+                    version::int_text(interval.start),
+                    version::int_text(end)
+                ),
+                None => format!("{}+", version::int_text(interval.start)),
+            };
+            if interval.tier == compat::Tier::Structural {
+                format!("~{range}")
+            } else {
+                range
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+fn ends_range(min: Option<&str>, max: Option<&str>) -> String {
     match (min, max) {
-        (Some(min), Some(max)) if Version::new(min) == Version::new(max) => min.to_owned(),
+        (Some(min), Some(max)) if version::game_int(min) == version::game_int(max) => {
+            min.to_owned()
+        }
         (Some(min), Some(max)) => format!("{min} - {max}"),
         (Some(min), None) => format!("{min}+"),
         (None, Some(max)) => format!("- {max}"),
@@ -289,33 +357,12 @@ fn declared_range(mod_entry: &ModEntry) -> String {
     }
 }
 
-/// The version range of a stored mod, as displayed: the declared
-/// constraint when the manifests declare one, otherwise the folder-name
-/// hint prefixed with ~ — a tier below a declared constraint.
-fn version_range(mod_entry: &ModEntry) -> String {
-    let declared = declared_range(mod_entry);
-    if declared != "-" {
-        return declared;
-    }
-    inferred_range(mod_entry)
-}
-
-/// The folder-name hint as displayed: a lower bound only — the game
-/// loads the lowest compatible folder, so folder structure never caps
-/// a mod from above.
-fn inferred_range(mod_entry: &ModEntry) -> String {
-    match &mod_entry.inferred_min {
-        Some(min) => format!("~{min}+"),
-        None => "-".to_owned(),
-    }
-}
-
-/// True when the displayed range is the folder-name hint rather than a
-/// declared constraint.
+/// True when any of the mod's availability rests on folder structure
+/// rather than an author-declared range.
 fn is_inferred(mod_entry: &ModEntry) -> bool {
-    mod_entry.version_min.is_none()
-        && mod_entry.version_max.is_none()
-        && mod_entry.inferred_min.is_some()
+    compat::available_intervals(mod_entry)
+        .iter()
+        .any(|interval| interval.tier == compat::Tier::Structural)
 }
 
 /// Render detected game version info for the detect/probe commands.

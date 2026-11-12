@@ -4,8 +4,11 @@
 //! A folder under `mods/` counts as a mod when it holds a mod.info
 //! directly (Build 41 shape) or in an immediate subdirectory (Build 42
 //! version folders or `common/`). Manifests are the single source of
-//! truth; version folder names are never read as version data (see
-//! docs/research/pz-modding.md §5.3).
+//! truth for identity and dependencies; version folder names are never
+//! read as version data — but they are captured as the game's
+//! selection key, since the game loads the highest version folder ≤
+//! the running version and checks that folder's manifest range
+//! (docs/research/mod-resolution.md §3–§4).
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -13,7 +16,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 use super::mod_info::{self, ModInfo};
-use super::version::Version;
+use super::version;
 
 /// Which build layouts a mod's manifests were found in.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -26,9 +29,33 @@ pub enum Layout {
     Hybrid,
 }
 
-/// One mod bundled in a workshop item, aggregated from its mod.info
-/// manifests. This exact type is serialized into the store's mod.json
-/// sidecar, so the capture path and the file format cannot drift.
+/// The versionMin/versionMax one manifest declares; a missing end is
+/// unbounded.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ManifestRange {
+    #[serde(default)]
+    pub min: Option<String>,
+    #[serde(default)]
+    pub max: Option<String>,
+}
+
+/// One version folder's manifest, keyed by the folder's game-version
+/// int — the key the game's folder selection runs on.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FolderRange {
+    /// `major * 1000 + min(minor, 999)` of the folder name.
+    pub version: u64,
+    /// The folder name as written.
+    pub name: String,
+    #[serde(default)]
+    pub min: Option<String>,
+    #[serde(default)]
+    pub max: Option<String>,
+}
+
+/// One mod bundled in a workshop item, from its mod.info manifests.
+/// This exact type is serialized into the store's mod.json sidecar, so
+/// the capture path and the file format cannot drift.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ModEntry {
     /// Folder name under `mods/`.
@@ -43,20 +70,19 @@ pub struct ModEntry {
     /// `author=` of that manifest.
     #[serde(default)]
     pub author: Option<String>,
-    /// Lowest `versionMin` across all manifests; None = unbounded.
+    /// Declared ranges per version folder. The game selects the
+    /// highest folder ≤ the running version and checks that folder's
+    /// manifest range — never an aggregate across folders.
     #[serde(default)]
-    pub version_min: Option<String>,
-    /// Highest `versionMax` across all manifests; None = unbounded.
+    pub folders: Vec<FolderRange>,
+    /// The `common/` manifest, when the mod ships one; its min/max are
+    /// the declared range, when it declares one. Some with no fields
+    /// means the manifest exists but declares nothing.
     #[serde(default)]
-    pub version_max: Option<String>,
-    /// Version lower bound inferred from the version-folder names,
-    /// captured always but shown only when the manifests declare
-    /// nothing. Set only when there is no `common/` manifest — with
-    /// one, the game loads the mod on any B42 version via the fallback.
-    /// A packaging hint, not a compatibility claim — folder names lie
-    /// (docs/research/pz-modding.md §5.3).
+    pub common: Option<ManifestRange>,
+    /// The B41 root manifest, when the mod ships one.
     #[serde(default)]
-    pub inferred_min: Option<String>,
+    pub root: Option<ManifestRange>,
     /// `require=` Mod IDs, unioned across manifests.
     #[serde(default)]
     pub requires: Vec<String>,
@@ -93,10 +119,10 @@ pub fn inspect_item(item_dir: &Path) -> Vec<ModEntry> {
 }
 
 fn inspect_mod(name: &str, dir: &Path) -> Option<ModEntry> {
-    let root = dir.join("mod.info");
-    let root = root.is_file().then_some(root);
+    let root_path = dir.join("mod.info");
+    let root_path = root_path.is_file().then_some(root_path);
 
-    let mut common = None;
+    let mut common_path = None;
     let mut versions: Vec<(u64, String, PathBuf)> = Vec::new();
     for entry in fs::read_dir(dir).ok()?.flatten() {
         let sub = entry.path();
@@ -105,86 +131,132 @@ fn inspect_mod(name: &str, dir: &Path) -> Option<ModEntry> {
             continue;
         }
         if sub.file_name().is_some_and(|n| n == "common") {
-            common = Some(info);
+            common_path = Some(info);
         } else {
             let folder = sub
                 .file_name()
                 .map(|n| n.to_string_lossy().into_owned())
                 .unwrap_or_default();
-            let key = version_dir_int(&folder);
+            let key = version::game_int(&folder);
             versions.push((key, folder, info));
         }
     }
     versions.sort_by_key(|(key, _, _)| *key);
 
-    if root.is_none() && common.is_none() && versions.is_empty() {
+    if root_path.is_none() && common_path.is_none() && versions.is_empty() {
         return None;
     }
 
-    // The manifest the game would read: the lowest compatible version
-    // folder (its selection rule, floor 42.0), then `common/`, then the
-    // B41 root manifest.
-    let floor = 42 * 1000;
-    let identity = versions
-        .iter()
-        .find(|(key, _, _)| *key >= floor)
-        .or(versions.first())
-        .map(|(_, _, path)| path)
-        .or(common.as_ref())
-        .or(root.as_ref());
-
-    let manifests: Vec<PathBuf> = root
-        .iter()
-        .chain(common.iter())
-        .chain(versions.iter().map(|(_, _, path)| path))
-        .cloned()
-        .collect();
-    let infos: Vec<ModInfo> = manifests.iter().map(|path| mod_info::parse(path)).collect();
-    let identity_info = identity.map(|path| mod_info::parse(path));
-
-    let mins: Vec<&Version> = infos
-        .iter()
-        .filter_map(|i| i.version_min.as_ref())
-        .collect();
-    let maxs: Vec<&Version> = infos
-        .iter()
-        .filter_map(|i| i.version_max.as_ref())
+    let root_info = root_path.as_ref().map(|path| mod_info::parse(path));
+    let common_info = common_path.as_ref().map(|path| mod_info::parse(path));
+    let folder_infos: Vec<(FolderRange, ModInfo)> = versions
+        .into_iter()
+        .map(|(key, folder, path)| {
+            let info = mod_info::parse(&path);
+            let range = FolderRange {
+                version: key,
+                name: folder,
+                min: info.version_min.as_ref().map(|v| v.text().to_owned()),
+                max: info.version_max.as_ref().map(|v| v.text().to_owned()),
+            };
+            (range, info)
+        })
         .collect();
 
-    // Version lower bound inferred from the version-folder names,
-    // using the game's own name→version mapping. The folder set bounds
-    // compatibility only from below: the game loads the lowest folder
-    // ≤ the running version, so every build ≥ the lowest folder finds
-    // one, and a `common/` manifest covers the builds below it via the
-    // fallback. Folders below the game's 42.0 floor are never
-    // selected, so they bound nothing.
-    let inferred_min = if common.is_none() {
-        versions
-            .iter()
-            .find(|(key, _, _)| *key >= floor)
-            .map(|(_, folder, _)| folder.clone())
-    } else {
-        None
+    // Identity comes from the manifests the game reads on current
+    // builds — the highest version folder first, then `common/`, then
+    // the B41 root manifest — with the first manifest providing each
+    // field winning.
+    let mut mod_id = None;
+    let mut title = None;
+    let mut author = None;
+    for (_, info) in folder_infos.iter().rev() {
+        fill_identity(&mut mod_id, &info.id);
+        fill_identity(&mut title, &info.name);
+        fill_identity(&mut author, &info.author);
+    }
+    if let Some(info) = &common_info {
+        fill_identity(&mut mod_id, &info.id);
+        fill_identity(&mut title, &info.name);
+        fill_identity(&mut author, &info.author);
+    }
+    if let Some(info) = &root_info {
+        fill_identity(&mut mod_id, &info.id);
+        fill_identity(&mut title, &info.name);
+        fill_identity(&mut author, &info.author);
+    }
+
+    let info_refs: Vec<&ModInfo> = folder_infos
+        .iter()
+        .map(|(_, info)| info)
+        .chain(common_info.iter())
+        .chain(root_info.iter())
+        .collect();
+    let requires = union(info_refs.iter().map(|i| &i.requires));
+    let incompatible = union(info_refs.iter().map(|i| &i.incompatible));
+    let load_before = union(info_refs.iter().map(|i| &i.load_before));
+    let load_after = union(info_refs.iter().map(|i| &i.load_after));
+    let folders: Vec<FolderRange> = folder_infos.into_iter().map(|(range, _)| range).collect();
+    let common = common_info.map(|info| ManifestRange {
+        min: info.version_min.as_ref().map(|v| v.text().to_owned()),
+        max: info.version_max.as_ref().map(|v| v.text().to_owned()),
+    });
+    let root = root_info.map(|info| ManifestRange {
+        min: info.version_min.as_ref().map(|v| v.text().to_owned()),
+        max: info.version_max.as_ref().map(|v| v.text().to_owned()),
+    });
+    let layout = match (root_path.is_some(), common_path.is_some() || !folders.is_empty()) {
+        (true, true) => Layout::Hybrid,
+        (true, false) => Layout::B41,
+        (false, _) => Layout::B42,
     };
 
     Some(ModEntry {
         name: name.to_owned(),
-        mod_id: identity_info.as_ref().and_then(|i| i.id.clone()),
-        title: identity_info.as_ref().and_then(|i| i.name.clone()),
-        author: identity_info.as_ref().and_then(|i| i.author.clone()),
-        version_min: mins.iter().min().map(|v| v.text().to_owned()),
-        version_max: maxs.iter().max().map(|v| v.text().to_owned()),
-        inferred_min,
-        requires: union(infos.iter().map(|i| &i.requires)),
-        incompatible: union(infos.iter().map(|i| &i.incompatible)),
-        load_before: union(infos.iter().map(|i| &i.load_before)),
-        load_after: union(infos.iter().map(|i| &i.load_after)),
-        layout: match (root.is_some(), common.is_some() || !versions.is_empty()) {
-            (true, true) => Layout::Hybrid,
-            (true, false) => Layout::B41,
-            (false, _) => Layout::B42,
-        },
+        mod_id,
+        title,
+        author,
+        folders,
+        common,
+        root,
+        requires,
+        incompatible,
+        load_before,
+        load_after,
+        layout,
     })
+}
+
+fn fill_identity(slot: &mut Option<String>, value: &Option<String>) {
+    if slot.is_none() {
+        *slot = value.clone();
+    }
+}
+
+/// The lowest version folder the B42 loader could select: the load
+/// lower bound when no `common/` manifest covers the versions below.
+pub fn lowest_folder(mod_entry: &ModEntry) -> Option<&FolderRange> {
+    mod_entry
+        .folders
+        .iter()
+        .filter(|f| f.version >= 42 * 1000)
+        .min_by_key(|f| f.version)
+}
+
+/// True when any manifest declares a versionMin or versionMax.
+pub fn has_declared_range(mod_entry: &ModEntry) -> bool {
+    mod_entry
+        .folders
+        .iter()
+        .any(|f| f.min.is_some() || f.max.is_some())
+        || mod_entry
+            .common
+            .as_ref()
+            .is_some_and(|r| r.min.is_some() || r.max.is_some())
+        || mod_entry
+            .root
+            .as_ref()
+            .is_some_and(|r| r.min.is_some() || r.max.is_some())
 }
 
 /// Union of ID lists across manifests, preserving first-seen order.
@@ -198,16 +270,6 @@ fn union<'a>(lists: impl Iterator<Item = &'a Vec<String>>) -> Vec<String> {
         }
     }
     out
-}
-
-/// The game's version-folder key: `major * 1000 + min(minor, 999)`,
-/// split on '.'; the third component is never read and non-numeric
-/// parts count as 0 (docs/research/mod-resolution.md §3).
-fn version_dir_int(name: &str) -> u64 {
-    let mut parts = name.trim().split('.');
-    let major: u64 = parts.next().and_then(|p| p.parse().ok()).unwrap_or(0);
-    let minor: u64 = parts.next().and_then(|p| p.parse().ok()).unwrap_or(0);
-    major * 1000 + minor.min(999)
 }
 
 #[cfg(test)]
@@ -228,24 +290,12 @@ mod tests {
         write(&item, "mods/Old Mod/mod.info", "name=Old Mod\nid=OM\n");
         // B42: version folders plus common.
         let item = base.join("b42");
-        write(
-            &item,
-            "mods/New Mod/42.16/mod.info",
-            "name=New Mod\nid=NM\nversionMin=42.16\n",
-        );
-        write(
-            &item,
-            "mods/New Mod/common/mod.info",
-            "name=New Mod\nid=NM\n",
-        );
+        write(&item, "mods/New Mod/42.16/mod.info", "name=New Mod\nid=NM\nversionMin=42.16\n");
+        write(&item, "mods/New Mod/common/mod.info", "name=New Mod\nid=NM\n");
         // Hybrid: root manifest plus a version folder.
         let item = base.join("hybrid");
         write(&item, "mods/Both/mod.info", "name=Both\nid=B\n");
-        write(
-            &item,
-            "mods/Both/42.5/mod.info",
-            "name=Both\nid=B\nversionMin=42.5\n",
-        );
+        write(&item, "mods/Both/42.5/mod.info", "name=Both\nid=B\nversionMin=42.5\n");
         // Not a mod: no manifest anywhere.
         let item = base.join("empty");
         write(&item, "mods/Not A Mod/readme.txt", "hi\n");
@@ -259,30 +309,28 @@ mod tests {
     }
 
     #[test]
-    fn identity_comes_from_the_lowest_compatible_version_folder() {
+    fn identity_comes_from_the_highest_version_folder() {
         let base = std::env::temp_dir().join(format!("snapoid-item-id-{}", std::process::id()));
         let item = base.join("item");
-        write(
-            &item,
-            "mods/M/42.16/mod.info",
-            "name=M 16\nid=M16\nauthor=A\n",
-        );
+        write(&item, "mods/M/42.16/mod.info", "name=M 16\nid=M16\nauthor=A\n");
         write(&item, "mods/M/42.22/mod.info", "name=M 22\nid=M22\n");
         write(&item, "mods/M/common/mod.info", "name=M common\nid=MC\n");
 
         let mods = inspect_item(&item);
         assert_eq!(mods.len(), 1);
-        // The game picks the lowest compatible folder; its manifest is
-        // the identity source.
-        assert_eq!(mods[0].mod_id.as_deref(), Some("M16"));
-        assert_eq!(mods[0].title.as_deref(), Some("M 16"));
+        // The game reads the highest folder ≤ the running version; on
+        // current builds that is the highest folder, so its manifest
+        // is the identity source.
+        assert_eq!(mods[0].mod_id.as_deref(), Some("M22"));
+        assert_eq!(mods[0].title.as_deref(), Some("M 22"));
+        // Fields the highest manifest omits fall through to lower ones.
         assert_eq!(mods[0].author.as_deref(), Some("A"));
 
         fs::remove_dir_all(&base).unwrap();
     }
 
     #[test]
-    fn versions_aggregate_and_ids_union_across_manifests() {
+    fn captures_per_folder_ranges() {
         let base = std::env::temp_dir().join(format!("snapoid-item-agg-{}", std::process::id()));
         let item = base.join("item");
         write(
@@ -298,10 +346,34 @@ mod tests {
 
         let mods = inspect_item(&item);
         assert_eq!(mods.len(), 1);
-        assert_eq!(mods[0].version_min.as_deref(), Some("42.10"));
-        assert_eq!(mods[0].version_max.as_deref(), Some("42.99"));
+        let folders = &mods[0].folders;
+        assert_eq!(folders.len(), 2);
+        assert_eq!(folders[0].version, 42_016);
+        assert_eq!(folders[0].name, "42.16");
+        assert_eq!(folders[0].min.as_deref(), Some("42.16"));
+        assert_eq!(folders[0].max, None);
+        assert_eq!(folders[1].version, 42_022);
+        assert_eq!(folders[1].min.as_deref(), Some("42.10"));
+        assert_eq!(folders[1].max.as_deref(), Some("42.99"));
         assert_eq!(mods[0].requires, vec!["Alpha", "Beta", "Gamma"]);
         assert_eq!(mods[0].load_after, vec!["Late"]);
+
+        fs::remove_dir_all(&base).unwrap();
+    }
+
+    #[test]
+    fn captures_common_and_root_manifests() {
+        let base = std::env::temp_dir().join(format!("snapoid-item-cm-{}", std::process::id()));
+        let item = base.join("item");
+        write(&item, "mods/M/mod.info", "name=M\nid=M\nversionMax=41.99\n");
+        write(&item, "mods/M/common/mod.info", "name=M\nid=M\nversionMin=42.0\n");
+        write(&item, "mods/M/42.20/mod.info", "name=M\nid=M\n");
+
+        let mods = inspect_item(&item);
+        assert_eq!(mods[0].root.as_ref().unwrap().max.as_deref(), Some("41.99"));
+        assert_eq!(mods[0].common.as_ref().unwrap().min.as_deref(), Some("42.0"));
+        assert_eq!(mods[0].folders.len(), 1);
+        assert_eq!(mods[0].folders[0].name, "42.20");
 
         fs::remove_dir_all(&base).unwrap();
     }
@@ -310,60 +382,31 @@ mod tests {
     fn version_folder_names_are_not_version_data() {
         let base = std::env::temp_dir().join(format!("snapoid-item-vm-{}", std::process::id()));
         let item = base.join("item");
-        // Folder names lie: 42.0.5 truncates to 42.0, and a manifest
-        // without version fields means unbounded regardless of layout.
+        // Folder names lie: 42.0.5 truncates to 42.0 in the game's key.
         write(&item, "mods/M/42.0.5/mod.info", "name=M\nid=M\n");
         write(&item, "mods/M/43/mod.info", "name=M\nid=M\n");
 
         let mods = inspect_item(&item);
-        assert_eq!(mods[0].version_min, None);
-        assert_eq!(mods[0].version_max, None);
+        assert_eq!(mods[0].folders[0].version, 42_000);
+        assert_eq!(mods[0].folders[0].min, None);
+        assert_eq!(mods[0].folders[0].max, None);
         assert_eq!(mods[0].layout, Layout::B42);
 
         fs::remove_dir_all(&base).unwrap();
     }
 
     #[test]
-    fn infers_lower_bound_from_folder_names_when_manifests_are_silent() {
-        let base = std::env::temp_dir().join(format!("snapoid-item-inf-{}", std::process::id()));
+    fn lowest_folder_skips_sub_floor_folders() {
+        let base = std::env::temp_dir().join(format!("snapoid-item-lf-{}", std::process::id()));
         let item = base.join("item");
-        // Folders below the game's 42.0 floor (B41-era packaging) do
-        // not bound the hint; the name is kept as written.
         write(&item, "mods/M/41/mod.info", "name=M\nid=M\n");
         write(&item, "mods/M/42.16/mod.info", "name=M\nid=M\n");
-        write(&item, "mods/M/42.22/mod.info", "name=M\nid=M\n");
 
         let mods = inspect_item(&item);
-        assert_eq!(mods[0].version_min, None);
-        assert_eq!(mods[0].version_max, None);
-        // A lower bound only: the game loads the lowest folder ≤ the
-        // running version, so nothing here caps the mod from above.
-        assert_eq!(mods[0].inferred_min.as_deref(), Some("42.16"));
-
-        // A `common/` manifest is the game's fallback for builds below
-        // every folder, so the folders bound nothing at all.
-        let item = base.join("with-common");
-        write(&item, "mods/C/42.16/mod.info", "name=C\nid=C\n");
-        write(&item, "mods/C/common/mod.info", "name=C\nid=C\n");
-        let mods = inspect_item(&item);
-        assert_eq!(mods[0].inferred_min, None);
-
-        // Declared fields are captured independently of the hint.
-        let item = base.join("declared");
-        write(
-            &item,
-            "mods/D/42.16/mod.info",
-            "name=D\nid=D\nversionMin=42.16\n",
-        );
-        let mods = inspect_item(&item);
-        assert_eq!(mods[0].version_min.as_deref(), Some("42.16"));
-        assert_eq!(mods[0].inferred_min.as_deref(), Some("42.16"));
-
-        // No version folders at all (B41 layout): no hint.
-        let item = base.join("b41");
-        write(&item, "mods/O/mod.info", "name=O\nid=O\n");
-        let mods = inspect_item(&item);
-        assert_eq!(mods[0].inferred_min, None);
+        // The 41 folder is below the game's 42.0 floor and never
+        // selected by the B42 loader.
+        assert_eq!(lowest_folder(&mods[0]).map(|f| f.name.as_str()), Some("42.16"));
+        assert!(!has_declared_range(&mods[0]));
 
         fs::remove_dir_all(&base).unwrap();
     }
