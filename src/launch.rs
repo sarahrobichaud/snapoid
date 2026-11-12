@@ -18,6 +18,7 @@ use std::process::{Command, Stdio};
 
 use anyhow::{Context as _, Result};
 
+use crate::fsops::sanitize_name;
 use crate::platform;
 use crate::store::GameInstance;
 
@@ -60,7 +61,7 @@ pub fn plan(instance: &GameInstance, options: &LaunchOptions) -> Result<LaunchPl
     let cwd = canonical_cwd(&instance.game_dir);
 
     let mut args = if options.server {
-        server_args(sep, &cachedir)
+        server_args(sep, &cachedir, &server_name(instance))
     } else {
         client_args(sep, &cachedir, options.nosteam)
     };
@@ -170,6 +171,12 @@ fn client_args(sep: &str, cachedir: &str, nosteam: bool) -> Vec<String> {
         format!(".{sep}projectzomboid.jar"),
         "zombie.gameStates.MainScreenState".to_owned(),
         format!("-cachedir={cachedir}"),
+        // The profile's mods/ folder is the only mod source: the store-
+        // driven model, immune to workshop shadowing (the default
+        // "workshop,steam,mods" order lets workshop copies win duplicate
+        // Mod IDs).
+        "-modfolders".to_owned(),
+        "mods".to_owned(),
     ];
     if nosteam {
         args.push("-nosteam".to_owned());
@@ -177,12 +184,20 @@ fn client_args(sep: &str, cachedir: &str, nosteam: bool) -> Vec<String> {
     args
 }
 
+/// The dedicated-server name for an instance: namespaces the server's
+/// config, database, and saves (`Server/<name>.ini`, `db/<name>.db`,
+/// `Saves/Multiplayer/<name>/`). "servertest" is only the game's
+/// default; a per-instance name isolates instances from each other.
+pub fn server_name(instance: &GameInstance) -> String {
+    format!("snapoid_server_{}", sanitize_name(&instance.name))
+}
+
 /// Dedicated server launch line, from ProjectZomboidServer.bat, plus
 /// `-Dzomboid.steam=1` from the client bat: without it the server
 /// starts steamless ("*** Steam is not enabled") and Steam clients
 /// cannot see or join it. (The password is added by [`plan`] when
 /// needed.)
-fn server_args(sep: &str, cachedir: &str) -> Vec<String> {
+fn server_args(sep: &str, cachedir: &str, server_name: &str) -> Vec<String> {
     vec![
         "--enable-native-access=ALL-UNNAMED".to_owned(),
         "--add-exports=java.base/jdk.internal.misc=ALL-UNNAMED".to_owned(),
@@ -196,6 +211,13 @@ fn server_args(sep: &str, cachedir: &str) -> Vec<String> {
         format!(".{sep}projectzomboid.jar"),
         "zombie.network.GameServer".to_owned(),
         format!("-cachedir={cachedir}"),
+        // Store-driven like the client: only the profile's mods/.
+        "-modfolders".to_owned(),
+        "mods".to_owned(),
+        // Per-instance server files instead of the shared "servertest"
+        // default.
+        "-servername".to_owned(),
+        server_name.to_owned(),
     ]
 }
 
@@ -277,6 +299,8 @@ mod tests {
         assert!(text.contains("-Djava.library.path=./win64/;./"));
         assert!(text.contains("zombie.gameStates.MainScreenState"));
         assert!(text.contains(r"-cachedir=C:\store\instance\p\profile"));
+        // Store-driven: the profile's mods/ folder is the only source.
+        assert!(text.contains("-modfolders mods"));
         assert!(!text.contains("-nosteam"));
 
         let with = client_args(";", "x", true);
@@ -285,7 +309,7 @@ mod tests {
 
     #[test]
     fn server_args_match_bat() {
-        let args = server_args(";", r"C:\p");
+        let args = server_args(";", r"C:\p", "snapoid_server_test");
         let text = args.join(" ");
         assert!(text.contains("zombie.network.GameServer"));
         assert!(
@@ -295,6 +319,11 @@ mod tests {
         assert!(text.contains("-XX:+UseZGC"));
         assert!(text.contains("-Djava.library.path=./natives/;./natives/win64/;./"));
         assert!(text.contains("-cachedir=C:\\p"));
+        // Store-driven like the client: only the profile's mods/.
+        assert!(text.contains("-modfolders mods"));
+        // Per-instance server files instead of the shared "servertest"
+        // default.
+        assert!(text.contains("-servername snapoid_server_test"));
         // The password is added by plan(), not here.
         assert!(!text.contains("-adminpassword"));
     }

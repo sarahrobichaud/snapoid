@@ -39,18 +39,22 @@ pub struct ManifestRange {
     pub max: Option<String>,
 }
 
-/// One version folder's manifest, keyed by the folder's game-version
-/// int — the key the game's folder selection runs on.
+/// One version folder, keyed by the folder's game-version int — the
+/// key the game's folder selection runs on. Selection is by name only
+/// (`getModVersionDirName` never checks for mod.info), and the
+/// selected folder's content loads even when it ships no manifest —
+/// the manifest is then read from `common/` as the fallback.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FolderRange {
     /// `major * 1000 + min(minor, 999)` of the folder name.
     pub version: u64,
     /// The folder name as written.
     pub name: String,
+    /// The folder's mod.info, when it ships one; its min/max are the
+    /// declared range, when it declares one. None means the folder
+    /// carries content only.
     #[serde(default)]
-    pub min: Option<String>,
-    #[serde(default)]
-    pub max: Option<String>,
+    pub manifest: Option<ManifestRange>,
 }
 
 /// One mod bundled in a workshop item, from its mod.info manifests.
@@ -75,9 +79,12 @@ pub struct ModEntry {
     /// manifest range — never an aggregate across folders.
     #[serde(default)]
     pub folders: Vec<FolderRange>,
-    /// The `common/` manifest, when the mod ships one; its min/max are
-    /// the declared range, when it declares one. Some with no fields
-    /// means the manifest exists but declares nothing.
+    /// The `common/` directory ships; its content loads on every B42
+    /// version (overwritten by the selected version folder), manifest
+    /// or not.
+    #[serde(default)]
+    pub common_dir: bool,
+    /// The `common/` mod.info's declared range, when it ships one.
     #[serde(default)]
     pub common: Option<ManifestRange>,
     /// The B41 root manifest, when the mod ships one.
@@ -123,43 +130,62 @@ fn inspect_mod(name: &str, dir: &Path) -> Option<ModEntry> {
     let root_path = root_path.is_file().then_some(root_path);
 
     let mut common_path = None;
-    let mut versions: Vec<(u64, String, PathBuf)> = Vec::new();
+    let mut common_dir = false;
+    // Every numeric-named subdirectory is a version folder candidate:
+    // the game selects them by name alone, manifest or not.
+    let mut versions: Vec<(u64, String, Option<PathBuf>)> = Vec::new();
     for entry in fs::read_dir(dir).ok()?.flatten() {
         let sub = entry.path();
-        let info = sub.join("mod.info");
-        if !info.is_file() {
+        if !sub.is_dir() {
             continue;
         }
         if sub.file_name().is_some_and(|n| n == "common") {
-            common_path = Some(info);
-        } else {
-            let folder = sub
-                .file_name()
-                .map(|n| n.to_string_lossy().into_owned())
-                .unwrap_or_default();
-            let key = version::game_int(&folder);
-            versions.push((key, folder, info));
+            // The directory's content loads even without a manifest;
+            // only its mod.info (when present) declares a range.
+            common_dir = true;
+            let info = sub.join("mod.info");
+            common_path = info.is_file().then_some(info);
+            continue;
         }
+        let folder = sub
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let key = version::game_int(&folder);
+        if key == 0 {
+            continue;
+        }
+        let info = sub.join("mod.info");
+        versions.push((key, folder, info.is_file().then_some(info)));
     }
     versions.sort_by_key(|(key, _, _)| *key);
 
-    if root_path.is_none() && common_path.is_none() && versions.is_empty() {
+    // The game recognizes the mod through a manifest somewhere: the
+    // root (B41), common/, or a version folder's own mod.info.
+    let recognized = root_path.is_some()
+        || common_path.is_some()
+        || versions
+            .iter()
+            .any(|(_, _, info)| info.is_some());
+    if !recognized {
         return None;
     }
 
     let root_info = root_path.as_ref().map(|path| mod_info::parse(path));
     let common_info = common_path.as_ref().map(|path| mod_info::parse(path));
-    let folder_infos: Vec<(FolderRange, ModInfo)> = versions
+    let folder_infos: Vec<(FolderRange, Option<ModInfo>)> = versions
         .into_iter()
-        .map(|(key, folder, path)| {
-            let info = mod_info::parse(&path);
+        .map(|(key, folder, info_path)| {
+            let manifest = info_path.map(|path| mod_info::parse(&path));
             let range = FolderRange {
                 version: key,
                 name: folder,
-                min: info.version_min.as_ref().map(|v| v.text().to_owned()),
-                max: info.version_max.as_ref().map(|v| v.text().to_owned()),
+                manifest: manifest.as_ref().map(|info| ManifestRange {
+                    min: info.version_min.as_ref().map(|v| v.text().to_owned()),
+                    max: info.version_max.as_ref().map(|v| v.text().to_owned()),
+                }),
             };
-            (range, info)
+            (range, manifest)
         })
         .collect();
 
@@ -170,10 +196,12 @@ fn inspect_mod(name: &str, dir: &Path) -> Option<ModEntry> {
     let mut mod_id = None;
     let mut title = None;
     let mut author = None;
-    for (_, info) in folder_infos.iter().rev() {
-        fill_identity(&mut mod_id, &info.id);
-        fill_identity(&mut title, &info.name);
-        fill_identity(&mut author, &info.author);
+    for (_, manifest) in folder_infos.iter().rev() {
+        if let Some(info) = manifest {
+            fill_identity(&mut mod_id, &info.id);
+            fill_identity(&mut title, &info.name);
+            fill_identity(&mut author, &info.author);
+        }
     }
     if let Some(info) = &common_info {
         fill_identity(&mut mod_id, &info.id);
@@ -188,7 +216,7 @@ fn inspect_mod(name: &str, dir: &Path) -> Option<ModEntry> {
 
     let info_refs: Vec<&ModInfo> = folder_infos
         .iter()
-        .map(|(_, info)| info)
+        .filter_map(|(_, manifest)| manifest.as_ref())
         .chain(common_info.iter())
         .chain(root_info.iter())
         .collect();
@@ -217,6 +245,7 @@ fn inspect_mod(name: &str, dir: &Path) -> Option<ModEntry> {
         title,
         author,
         folders,
+        common_dir,
         common,
         root,
         requires,
@@ -248,7 +277,11 @@ pub fn has_declared_range(mod_entry: &ModEntry) -> bool {
     mod_entry
         .folders
         .iter()
-        .any(|f| f.min.is_some() || f.max.is_some())
+        .any(|f| {
+            f.manifest
+                .as_ref()
+                .is_some_and(|r| r.min.is_some() || r.max.is_some())
+        })
         || mod_entry
             .common
             .as_ref()
@@ -350,11 +383,14 @@ mod tests {
         assert_eq!(folders.len(), 2);
         assert_eq!(folders[0].version, 42_016);
         assert_eq!(folders[0].name, "42.16");
-        assert_eq!(folders[0].min.as_deref(), Some("42.16"));
-        assert_eq!(folders[0].max, None);
+        assert_eq!(
+            folders[0].manifest.as_ref().unwrap().min.as_deref(),
+            Some("42.16")
+        );
+        assert_eq!(folders[0].manifest.as_ref().unwrap().max, None);
         assert_eq!(folders[1].version, 42_022);
-        assert_eq!(folders[1].min.as_deref(), Some("42.10"));
-        assert_eq!(folders[1].max.as_deref(), Some("42.99"));
+        assert_eq!(folders[1].manifest.as_ref().unwrap().min.as_deref(), Some("42.10"));
+        assert_eq!(folders[1].manifest.as_ref().unwrap().max.as_deref(), Some("42.99"));
         assert_eq!(mods[0].requires, vec!["Alpha", "Beta", "Gamma"]);
         assert_eq!(mods[0].load_after, vec!["Late"]);
 
@@ -379,6 +415,32 @@ mod tests {
     }
 
     #[test]
+    fn captures_media_only_version_folders() {
+        let base = std::env::temp_dir().join(format!("snapoid-item-mo-{}", std::process::id()));
+        let item = base.join("item");
+        // The Project Viewpoint shape: a version folder with content
+        // but no mod.info, recognized through common/.
+        write(&item, "mods/M/42/media/lua/a.lua", "lua");
+        write(&item, "mods/M/common/mod.info", "name=M\nid=M\n");
+
+        let mods = inspect_item(&item);
+        assert_eq!(mods.len(), 1);
+        assert_eq!(mods[0].folders.len(), 1);
+        assert_eq!(mods[0].folders[0].version, 42_000);
+        assert_eq!(mods[0].folders[0].name, "42");
+        assert_eq!(mods[0].folders[0].manifest, None);
+        assert_eq!(mods[0].common.as_ref().unwrap().min, None);
+
+        // A numeric-named folder alone is not a mod: no manifest
+        // anywhere means the game cannot recognize it.
+        let item = base.join("bare");
+        write(&item, "mods/N/42/media/a.lua", "lua");
+        assert!(inspect_item(&item).is_empty());
+
+        fs::remove_dir_all(&base).unwrap();
+    }
+
+    #[test]
     fn version_folder_names_are_not_version_data() {
         let base = std::env::temp_dir().join(format!("snapoid-item-vm-{}", std::process::id()));
         let item = base.join("item");
@@ -388,8 +450,11 @@ mod tests {
 
         let mods = inspect_item(&item);
         assert_eq!(mods[0].folders[0].version, 42_000);
-        assert_eq!(mods[0].folders[0].min, None);
-        assert_eq!(mods[0].folders[0].max, None);
+        assert_eq!(
+            mods[0].folders[0].manifest.as_ref().unwrap().min,
+            None
+        );
+        assert_eq!(mods[0].folders[0].manifest.as_ref().unwrap().max, None);
         assert_eq!(mods[0].layout, Layout::B42);
 
         fs::remove_dir_all(&base).unwrap();

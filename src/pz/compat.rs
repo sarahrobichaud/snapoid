@@ -51,6 +51,10 @@ pub enum Incompatibility {
     /// No version folder the game could select and no `common/`
     /// fallback.
     NoFolder { lowest: Option<String> },
+    /// The selected folder ships no mod.info and there is no
+    /// `common/` fallback — the game cannot recognize the mod on this
+    /// version.
+    Unrecognized,
 }
 
 impl fmt::Display for Incompatibility {
@@ -81,6 +85,9 @@ impl fmt::Display for Incompatibility {
                 }
                 None => write!(f, "no version folder for this build"),
             },
+            Incompatibility::Unrecognized => {
+                write!(f, "not recognized on this version (no readable mod.info)")
+            }
         }
     }
 }
@@ -115,23 +122,52 @@ pub fn mod_compatibility(mod_entry: &ModEntry, game_version: &str) -> Compatibil
     }
 
     // The game selects the highest version folder ≤ the running
-    // version and checks that folder's declared range.
+    // version and reads that folder's mod.info, falling back to
+    // common/ when the folder ships none.
     let selected = mod_entry
         .folders
         .iter()
         .filter(|f| f.version >= floor && f.version <= game)
         .max_by_key(|f| f.version);
     if let Some(folder) = selected {
-        return declared_verdict(
-            folder.min.as_deref(),
-            folder.max.as_deref(),
-            game,
-            Manifest::Folder(folder.name.clone()),
-        );
+        match &folder.manifest {
+            Some(range) => {
+                return declared_verdict(
+                    range.min.as_deref(),
+                    range.max.as_deref(),
+                    game,
+                    Manifest::Folder(folder.name.clone()),
+                )
+            }
+            // The folder carries content only: the manifest comes from
+            // common/, or the mod is not recognized at all.
+            None => return common_verdict(mod_entry, game),
+        }
     }
 
-    // No selectable folder: the game's fallback folder "42.0" does not
-    // exist, so only a common/ manifest can carry the mod.
+    // No selectable folder: the game's fallback folder "42.0" does
+    // not exist, so only a common/ manifest can carry the mod.
+    common_verdict_fallback(mod_entry, game)
+}
+
+/// The verdict when the selected folder ships no mod.info: the game
+/// reads common/, or cannot recognize the mod.
+fn common_verdict(mod_entry: &ModEntry, game: u64) -> Compatibility {
+    match &mod_entry.common {
+        Some(common) => declared_verdict(
+            common.min.as_deref(),
+            common.max.as_deref(),
+            game,
+            Manifest::Common,
+        ),
+        None => Compatibility::Incompatible(Incompatibility::Unrecognized),
+    }
+}
+
+/// The verdict below the lowest folder: the game's fallback folder
+/// "42.0" does not exist, so only a common/ manifest can carry the
+/// mod.
+fn common_verdict_fallback(mod_entry: &ModEntry, game: u64) -> Compatibility {
     match &mod_entry.common {
         Some(common) => declared_verdict(
             common.min.as_deref(),
@@ -236,24 +272,41 @@ pub fn available_intervals(mod_entry: &ModEntry) -> Vec<Availability> {
     }
 
     // Each folder is selected from its own version until the next one.
+    // The manifest governing the domain is the folder's own mod.info,
+    // falling back to common/ when the folder ships none — and with
+    // neither, the game cannot recognize the mod there at all.
     for (index, folder) in folders.iter().enumerate() {
         let domain_start = folder.version;
         let domain_end = folders.get(index + 1).map(|next| next.version - 1);
-        let start = folder
-            .min
-            .as_deref()
-            .map(version::game_int)
-            .unwrap_or(domain_start)
-            .max(domain_start);
-        let end = match (&folder.max, domain_end) {
+        let (min, max, declares) = match &folder.manifest {
+            Some(manifest) => (
+                manifest.min.as_deref(),
+                manifest.max.as_deref(),
+                manifest.min.is_some() || manifest.max.is_some(),
+            ),
+            None => match &mod_entry.common {
+                Some(common) => (
+                    common.min.as_deref(),
+                    common.max.as_deref(),
+                    common.min.is_some() || common.max.is_some(),
+                ),
+                // Not recognized in this domain.
+                None => continue,
+            },
+        };
+        let start = min.map(version::game_int).unwrap_or(domain_start).max(domain_start);
+        let end = match (max, domain_end) {
             (Some(max), Some(domain)) => Some(version::game_int(max).min(domain)),
             (Some(max), None) => Some(version::game_int(max)),
             (None, Some(domain)) => Some(domain),
             (None, None) => None,
         };
-        let tier = declared_tier(folder.min.is_some() || folder.max.is_some());
         if end.is_none_or(|end| end >= start) {
-            out.push(Availability { start, end, tier });
+            out.push(Availability {
+                start,
+                end,
+                tier: declared_tier(declares),
+            });
         }
     }
 
@@ -329,8 +382,19 @@ mod tests {
         FolderRange {
             version: version::game_int(name),
             name: name.to_owned(),
-            min: min.map(str::to_owned),
-            max: max.map(str::to_owned),
+            manifest: Some(ManifestRange {
+                min: min.map(str::to_owned),
+                max: max.map(str::to_owned),
+            }),
+        }
+    }
+
+    /// A version folder that carries content only — no mod.info.
+    fn media_folder(name: &str) -> FolderRange {
+        FolderRange {
+            version: version::game_int(name),
+            name: name.to_owned(),
+            manifest: None,
         }
     }
 
@@ -346,6 +410,7 @@ mod tests {
             title: None,
             author: None,
             folders,
+            common_dir: false,
             common,
             root,
             requires: Vec::new(),
@@ -433,6 +498,51 @@ mod tests {
                     tier: Tier::Structural,
                 },
             ]
+        );
+    }
+
+    /// The shape of workshop item 3809306528 (Project Viewpoint): a
+    /// media-only `42` folder (no mod.info) plus a common/ manifest
+    /// declaring exactly 42.22. The game selects the 42 folder by name
+    /// and reads common/'s manifest; the folder's content loads either
+    /// way.
+    #[test]
+    fn media_only_folder_falls_back_to_the_common_manifest() {
+        let m = entry(
+            vec![media_folder("42")],
+            Some(ManifestRange {
+                min: Some("42.22".to_owned()),
+                max: Some("42.22".to_owned()),
+            }),
+            None,
+            Layout::B42,
+        );
+
+        // 42.22.2 keys as 42.22: inside common/'s declared range.
+        assert_eq!(mod_compatibility(&m, "42.22.2"), Compatibility::Compatible);
+        assert_eq!(
+            mod_compatibility(&m, "42.21"),
+            Compatibility::Incompatible(Incompatibility::DeclaredRange {
+                manifest: Manifest::Common,
+                min: Some("42.22".to_owned()),
+                max: Some("42.22".to_owned()),
+            })
+        );
+        assert_eq!(
+            available_intervals(&m),
+            vec![Availability {
+                start: 42_022,
+                end: Some(42_022),
+                tier: Tier::Declared,
+            }]
+        );
+
+        // Without common/ the mod is not recognized at all: the
+        // selected folder has no mod.info to fall back to.
+        let m = entry(vec![media_folder("42")], None, None, Layout::B42);
+        assert_eq!(
+            mod_compatibility(&m, "42.22.2"),
+            Compatibility::Incompatible(Incompatibility::Unrecognized)
         );
     }
 

@@ -12,7 +12,7 @@ use snapoid::pz::version;
 use snapoid::registry::Registry;
 use snapoid::scanner::workshop::{ModEntry, WorkshopItem};
 use snapoid::steam::SteamPaths;
-use snapoid::store::{GameInstance, Source, StoredGame, StoredMod};
+use snapoid::store::{GameInstance, InstallOutcome, Source, StoredGame, StoredMod};
 
 /// Render the workshop inventory from `scan`: per item, one row per
 /// bundled mod with its layout, Mod ID, declared version range, and
@@ -363,6 +363,52 @@ fn is_inferred(mod_entry: &ModEntry) -> bool {
     compat::available_intervals(mod_entry)
         .iter()
         .any(|interval| interval.tier == compat::Tier::Structural)
+}
+
+/// Render the outcome of an install into an instance's profile: the
+/// copied and skipped mods, then the activation artifacts.
+pub fn print_installed_mods(instance_name: &str, outcome: &InstallOutcome) {
+    let done = outcome.mods.iter().filter(|m| m.dir.is_some()).count();
+    println!(
+        "\n{} mod{} installed into instance {}'s profile",
+        done,
+        plural(done),
+        instance_name
+    );
+    for m in outcome.mods.iter().filter(|m| m.dir.is_some()) {
+        match &m.mod_id {
+            Some(id) => println!("  {}  (id={id})", m.name),
+            None => println!("  {}", m.name),
+        }
+    }
+    for m in outcome.mods.iter().filter(|m| m.dir.is_none()) {
+        println!(
+            "  skipped {}  — {}",
+            m.name,
+            m.skipped
+                .as_ref()
+                .map(ToString::to_string)
+                .unwrap_or_default()
+        );
+    }
+
+    let activation = &outcome.activation;
+    if activation.mod_ids.is_empty() {
+        println!("\nNo mods activated.");
+    } else {
+        println!(
+            "\n{} mod{} activated, load order:\n  {}",
+            activation.mod_ids.len(),
+            plural(activation.mod_ids.len()),
+            activation.mod_ids.join(", ")
+        );
+    }
+    for warning in &activation.warnings {
+        println!("  warning: {warning}");
+    }
+    println!("  client list:   {}", activation.default_txt.display());
+    println!("  server config: {}", activation.server_ini.display());
+    println!("  (the game rewrites these on exit — install while it is closed)");
 }
 
 /// Render detected game version info for the detect/probe commands.

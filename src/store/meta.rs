@@ -87,7 +87,7 @@ pub fn write<T: Serialize>(path: &Path, meta: &T) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::pz::item::FolderRange;
+    use crate::pz::item::{FolderRange, ManifestRange};
 
     /// Sidecars written before the enriched mod metadata must keep
     /// parsing: every added field defaults.
@@ -123,9 +123,12 @@ mod tests {
                 folders: vec![FolderRange {
                     version: 42_016,
                     name: "42.16".to_owned(),
-                    min: Some("42.16".to_owned()),
-                    max: None,
+                    manifest: Some(ManifestRange {
+                        min: Some("42.16".to_owned()),
+                        max: None,
+                    }),
                 }],
+                common_dir: false,
                 common: None,
                 root: None,
                 requires: vec!["Lib".to_owned()],
@@ -144,7 +147,7 @@ mod tests {
         assert_eq!(parsed.mods.len(), 1);
         assert_eq!(parsed.mods[0].mod_id.as_deref(), Some("TM"));
         assert_eq!(parsed.mods[0].requires, vec!["Lib"]);
-        assert_eq!(parsed.mods[0].folders[0].min.as_deref(), Some("42.16"));
+        assert_eq!(parsed.mods[0].folders[0].manifest.as_ref().unwrap().min.as_deref(), Some("42.16"));
         assert_eq!(parsed.mods[0].folders[0].version, 42_016);
         assert_eq!(parsed.mods[0].layout, Layout::B42);
         assert_eq!(parsed.layout, Some(Layout::B42));

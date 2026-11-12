@@ -5,6 +5,7 @@ use snapoid::pz::compat::{self, Compatibility, Incompatibility};
 use snapoid::store::StoredMod;
 
 use super::open_store;
+use crate::report;
 use crate::ui;
 
 #[derive(Subcommand)]
@@ -80,15 +81,10 @@ fn install(name: Option<String>) -> anyhow::Result<()> {
         println!("\nNo mods selected; nothing to install.");
         return Ok(());
     }
-    println!(
-        "\n{} mod{} selected for instance {}:",
-        picked.len(),
-        if picked.len() == 1 { "" } else { "s" },
-        instance.name
-    );
-    for index in picked {
-        println!("  {}", items[index]);
-    }
+
+    let picked_items: Vec<&StoredMod> = picked.iter().map(|&index| compatible[index]).collect();
+    let outcome = store.instance_install_mods(&instance, &picked_items, ui::progress_factory)?;
+    report::print_installed_mods(&instance.name, &outcome);
     Ok(())
 }
 

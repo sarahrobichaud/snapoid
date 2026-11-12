@@ -18,6 +18,7 @@
 //! Windows and WSL invocations share one store on a native filesystem.
 
 pub mod games;
+pub mod install;
 pub mod instances;
 pub mod meta;
 pub mod mods;
@@ -33,6 +34,7 @@ use crate::platform;
 use crate::{info, warn};
 
 pub use games::StoredGame;
+pub use install::{Activation, InstallOutcome, InstalledMod};
 pub use instances::GameInstance;
 pub use meta::Source;
 pub use mods::StoredMod;
