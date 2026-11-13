@@ -1,6 +1,6 @@
-//! Dev build of the CLI: identical to `yapzm`, but the executable name
-//! selects the `yapzm-dev` store (see `yapzm::config::app_dir_name`).
+//! Dev build of the `yapzm` CLI.
 
+/// Runs the command-line interface.
 fn main() -> anyhow::Result<()> {
     yapzm::cli::run()
 }

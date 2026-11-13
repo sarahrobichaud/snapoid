@@ -2,4 +2,3 @@
 # executable name selects the store (see config::app_dir_name).
 [alias]
 dev = "run --bin yapzm-dev --"
-tst = "run --bin yapzm-test --"
