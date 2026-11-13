@@ -3,6 +3,12 @@ name = "snapoid"
 version = "0.1.0"
 edition = "2024"
 
+# Binary ships under the yapzm name; the package keeps the repo name until
+# the repo itself is renamed.
+[[bin]]
+name = "yapzm"
+path = "src/main.rs"
+
 [dependencies]
 anyhow = "1"
 clap = { version = "4", features = ["derive"] }

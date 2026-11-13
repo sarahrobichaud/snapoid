@@ -392,9 +392,10 @@ pub fn print_installed_mods(instance_name: &str, outcome: &InstallOutcome) {
         instance_name
     );
     for m in outcome.mods.iter().filter(|m| m.dir.is_some()) {
+        let unsafe_tag = if m.unsafe_install { "  [unsafe]" } else { "" };
         match &m.mod_id {
-            Some(id) => println!("  {}  (id={id})", m.name),
-            None => println!("  {}", m.name),
+            Some(id) => println!("  {}{unsafe_tag}  (id={id})", m.name),
+            None => println!("  {}{unsafe_tag}", m.name),
         }
     }
     for m in outcome.mods.iter().filter(|m| m.dir.is_none()) {

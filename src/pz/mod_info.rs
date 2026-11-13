@@ -152,6 +152,51 @@ fn set_version(slot: &mut Option<Version>, value: &str) {
     }
 }
 
+/// The tag an unsafe install appends to a mod's display name, so the
+/// game's mod list shows what was forced past its declared range.
+pub const UNSAFE_TAG: &str = " [unsafe]";
+
+/// The mod.info text for an unsafe install: the declared range becomes
+/// exactly `version` (`versionMin=` set to it, `versionMax=` dropped)
+/// and the display name gains [`UNSAFE_TAG`]. Line matching mirrors
+/// the game's loader, including its last-value-wins per key — so the
+/// rewrite tags the last `name=` line, the one whose value the game
+/// would keep, and replaces every `versionMin=`/`versionMax=` line.
+pub fn unsafe_text(text: &str, fallback_name: &str, version: &str) -> String {
+    let name = parse_str(text)
+        .name
+        .unwrap_or_else(|| fallback_name.to_owned());
+    // The name line the game's parse keeps is the last one.
+    let name_line = text
+        .lines()
+        .enumerate()
+        .filter(|(_, line)| matches!(match_line(line), Some((Field::Name, _))))
+        .map(|(index, _)| index)
+        .last();
+    let mut out = String::new();
+    let mut bounded = false;
+    for (index, line) in text.lines().enumerate() {
+        if line.starts_with("versionMin=") {
+            out.push_str(&format!("versionMin={version}\n"));
+            bounded = true;
+        } else if line.starts_with("versionMax=") {
+            // Dropped: the forced range is unbounded above.
+        } else if Some(index) == name_line {
+            out.push_str(&format!("name={name}{UNSAFE_TAG}\n"));
+        } else {
+            out.push_str(line);
+            out.push('\n');
+        }
+    }
+    if !bounded {
+        out.push_str(&format!("versionMin={version}\n"));
+    }
+    if name_line.is_none() {
+        out.push_str(&format!("name={name}{UNSAFE_TAG}\n"));
+    }
+    out
+}
+
 /// `require=`-style values: the game strips all backslashes before
 /// comma-splitting — that is why guides write `require=\ZombieBuddy`
 /// (docs/research/mod-resolution.md §4).
@@ -250,5 +295,49 @@ mod tests {
     fn missing_file_yields_defaults() {
         let parsed = parse(Path::new("nonexistent/mod.info"));
         assert_eq!(parsed, ModInfo::default());
+    }
+
+    #[test]
+    fn unsafe_text_pins_the_range_and_tags_the_name() {
+        let unsafe_text = unsafe_text(
+            "name=Bounded\nid=BM\nversionMin=42.16\nversionMax=42.19\n",
+            "Bounded Mod",
+            "42.22.2",
+        );
+        let parsed = info(&unsafe_text);
+        assert_eq!(parsed.name.as_deref(), Some("Bounded [unsafe]"));
+        assert_eq!(parsed.id.as_deref(), Some("BM"));
+        assert_eq!(parsed.version_min.as_ref().map(Version::text), Some("42.22.2"));
+        assert_eq!(parsed.version_max, None);
+    }
+
+    #[test]
+    fn unsafe_text_adds_missing_lines_and_keeps_the_rest() {
+        let unsafe_text = unsafe_text(
+            "id=BM\nposter=p.png\nrequire=Other\n",
+            "Bounded Mod",
+            "42.22.2",
+        );
+        let parsed = info(&unsafe_text);
+        assert_eq!(parsed.name.as_deref(), Some("Bounded Mod [unsafe]"));
+        assert_eq!(parsed.version_min.as_ref().map(Version::text), Some("42.22.2"));
+        assert_eq!(parsed.requires, vec!["Other"]);
+        assert!(unsafe_text.contains("poster=p.png"));
+        assert!(unsafe_text.contains("versionMin=42.22.2\n"));
+    }
+
+    #[test]
+    fn unsafe_text_tags_the_name_line_the_game_keeps() {
+        // The game's parse keeps the last value per key, so the
+        // rewrite tags the last name= line and leaves earlier ones
+        // (which it overwrites anyway) untouched.
+        let unsafe_text = unsafe_text(
+            "name=First\nname=Second\nversionMax=1.0\n",
+            "X",
+            "42.22.2",
+        );
+        assert_eq!(info(&unsafe_text).name.as_deref(), Some("Second [unsafe]"));
+        assert!(unsafe_text.contains("name=First\n"));
+        assert!(!unsafe_text.contains("versionMax"));
     }
 }

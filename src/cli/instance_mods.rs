@@ -4,7 +4,8 @@ use clap::Subcommand;
 
 use snapoid::fmt;
 use snapoid::pz::compat::{self, Compatibility, Incompatibility};
-use snapoid::store::{item_install_status, ItemStatus, StoredMod};
+use snapoid::pz::item::ModEntry;
+use snapoid::store::{mod_install_status, ModStatus, SelectedMod, StoredMod};
 
 use super::open_store;
 use crate::report;
@@ -58,10 +59,20 @@ fn install_modpack(name: Option<String>, path: &Path) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Pick compatible stored mods to install. The instance's install
-/// manifest remembers what is already installed: up-to-date mods are
-/// reported and left alone, mods the store has newer captures of are
-/// asked about (update or keep), and the rest make the checklist.
+/// One list row: a bundled mod of a stored item, with what the
+/// install manifest says about it. Items bundle several mods; the
+/// checklist offers them individually.
+struct Row<'a> {
+    item: &'a StoredMod,
+    entry: &'a ModEntry,
+    status: ModStatus,
+}
+
+/// Pick compatible stored mods to install, one bundled mod at a time.
+/// The instance's install manifest remembers what is already
+/// installed: up-to-date mods are reported and left alone, mods the
+/// store has newer captures of are asked about (update or keep), and
+/// the rest make the checklist.
 fn install(name: Option<String>) -> anyhow::Result<()> {
     let store = open_store()?;
     let name = super::instance::resolve_name(&store, name)?;
@@ -72,19 +83,49 @@ fn install(name: Option<String>) -> anyhow::Result<()> {
         return Ok(());
     }
 
-    // Only items whose bundled mods load on the instance's game
-    // version make the checklist; the rest are reported with reasons.
+    // Only bundled mods that load on the instance's game version make
+    // the checklist; items with none are reported with reasons, or
+    // offered mod-by-mod for an unsafe install.
     let manifest = store.instance_installed_manifest(&instance);
-    let mut compatible: Vec<(&StoredMod, ItemStatus)> = Vec::new();
+    let mut rows: Vec<Row> = Vec::new();
     let mut excluded: Vec<(&StoredMod, Incompatibility)> = Vec::new();
+    let mut unsafe_rows: Vec<Row> = Vec::new();
     let mut unknown = 0usize;
     for item in &mods {
         match compat::item_compatibility(&item.mods, &instance.version) {
             Compatibility::Compatible => {
-                let status = item_install_status(item, &instance.version, &manifest);
-                compatible.push((item, status));
+                for entry in &item.mods {
+                    if matches!(
+                        compat::mod_compatibility(entry, &instance.version),
+                        Compatibility::Compatible
+                    ) {
+                        let status = mod_install_status(item, entry, &manifest);
+                        rows.push(Row {
+                            item,
+                            entry,
+                            status,
+                        });
+                    }
+                }
             }
-            Compatibility::Incompatible(reason) => excluded.push((item, reason)),
+            Compatibility::Incompatible(reason) => {
+                let fixable = unsafe_rows.len();
+                for entry in &item.mods {
+                    if matches!(
+                        compat::mod_compatibility(entry, &instance.version),
+                        Compatibility::Incompatible(Incompatibility::DeclaredRange { .. })
+                    ) {
+                        unsafe_rows.push(Row {
+                            item,
+                            entry,
+                            status: ModStatus::New,
+                        });
+                    }
+                }
+                if unsafe_rows.len() == fixable {
+                    excluded.push((item, reason));
+                }
+            }
             Compatibility::Unknown => unknown += 1,
         }
     }
@@ -104,62 +145,52 @@ fn install(name: Option<String>) -> anyhow::Result<()> {
         println!();
     }
 
-    let up_to_date: Vec<&&StoredMod> = compatible
-        .iter()
-        .filter(|(_, status)| *status == ItemStatus::UpToDate)
-        .map(|(item, _)| item)
-        .collect();
+    let up_to_date: Vec<&Row> = rows.iter().filter(|r| r.status == ModStatus::UpToDate).collect();
     if !up_to_date.is_empty() {
         println!("Already installed at the stored version:");
-        for item in &up_to_date {
-            println!("  {}  {}", item.id, item_label(item));
+        for row in &up_to_date {
+            println!("  {}", describe_row(row.item, row.entry));
         }
         println!();
     }
 
-    // Newer captures in the store: ask per item whether to update or
+    let mut selected: Vec<SelectedMod> = Vec::new();
+
+    // Newer captures in the store: ask per mod whether to update or
     // keep the installed version.
-    let mut picked_items: Vec<&StoredMod> = Vec::new();
-    for (item, status) in &compatible {
-        let ItemStatus::UpdateAvailable { installed } = status else {
-            continue;
+    for row in rows.iter().filter(|r| matches!(r.status, ModStatus::UpdateAvailable { .. })) {
+        let ModStatus::UpdateAvailable { installed } = row.status else {
+            unreachable!("filtered above")
         };
         let options = [
             format!(
                 "Update to the stored version (updated {})",
-                fmt::format_date_utc(item.time_updated)
+                fmt::format_date_utc(row.item.time_updated)
             ),
             format!(
-                "Keep the installed version (installed {})",
-                fmt::format_date_utc(*installed)
+                "Keep the installed version (installed {})"
+                ,fmt::format_date_utc(installed)
             ),
         ];
-        let choice = ui::pick(
-            &options,
-            &format!(
-                "{}  {} — a newer version is in the store",
-                item.id,
-                item_label(item)
-            ),
-            0,
-        )?;
+        let choice = ui::pick(&options, &describe_row(row.item, row.entry), 0)?;
         if choice == 0 {
-            picked_items.push(item);
+            selected.push(SelectedMod {
+                item: row.item,
+                entry: row.entry,
+                unsafe_install: false,
+            });
         }
     }
 
-    let installable: Vec<(&StoredMod, ItemStatus)> = compatible
+    // Never-installed mods make the checklist, one row per mod.
+    let installable: Vec<&Row> = rows
         .iter()
-        .filter(|(_, status)| matches!(status, ItemStatus::New | ItemStatus::Partial))
-        .map(|(item, status)| (*item, *status))
+        .filter(|r| r.status == ModStatus::New)
         .collect();
     if !installable.is_empty() {
         let items: Vec<String> = installable
             .iter()
-            .map(|(item, status)| match status {
-                ItemStatus::Partial => format!("{}  (partially installed)", describe_mod(item)),
-                _ => describe_mod(item),
-            })
+            .map(|row| describe_row(row.item, row.entry))
             .collect();
         let picked = ui::multi_pick(
             &items,
@@ -168,17 +199,62 @@ fn install(name: Option<String>) -> anyhow::Result<()> {
                 instance.name, instance.version
             ),
         )?;
-        picked_items.extend(picked.iter().map(|&index| installable[index].0));
+        selected.extend(picked.iter().map(|&index| SelectedMod {
+            item: installable[index].item,
+            entry: installable[index].entry,
+            unsafe_install: false,
+        }));
     }
 
-    if picked_items.is_empty() {
+    // Mods the game refuses only for their declared version range can
+    // be forced in: their manifest is rewritten to the instance's
+    // version and the display name tagged.
+    if !unsafe_rows.is_empty() {
+        println!(
+            "These mods declare a version range that excludes version {}. \
+             Unsafe mode installs them anyway: the manifest the game reads is \
+             rewritten to that version and the name tagged [unsafe]:",
+            instance.version
+        );
+        let items: Vec<String> = unsafe_rows
+            .iter()
+            .map(|row| describe_row(row.item, row.entry))
+            .collect();
+        let picked = ui::multi_pick(
+            &items,
+            "Install in unsafe mode — space: toggle, enter: confirm",
+        )?;
+        selected.extend(picked.iter().map(|&index| SelectedMod {
+            item: unsafe_rows[index].item,
+            entry: unsafe_rows[index].entry,
+            unsafe_install: true,
+        }));
+        println!();
+    }
+
+    if selected.is_empty() {
         println!("\nNothing to install.");
         return Ok(());
     }
 
-    let outcome = store.instance_install_mods(&instance, &picked_items, ui::progress_factory)?;
+    let outcome = store.instance_install_selected(&instance, &selected, ui::progress_factory)?;
     report::print_installed_mods(&instance.name, &outcome);
     Ok(())
+}
+
+/// One checklist row: the item a mod is bundled in, the mod itself,
+/// its Mod ID, and when the stored copy was captured.
+fn describe_row(item: &StoredMod, entry: &ModEntry) -> String {
+    let name = entry.title.clone().unwrap_or_else(|| entry.name.clone());
+    let updated = if item.time_updated == 0 {
+        "unknown".to_owned()
+    } else {
+        fmt::format_date_utc(item.time_updated)
+    };
+    match &entry.mod_id {
+        Some(id) => format!("{}  {}  (id={id})  updated {}", item.id, name, updated),
+        None => format!("{}  {}  updated {}", item.id, name, updated),
+    }
 }
 
 /// A short label for a stored item: its title, else its first bundled
@@ -192,30 +268,4 @@ fn item_label(item: &StoredMod) -> String {
                 .map(|m| m.title.clone().unwrap_or_else(|| m.name.clone()))
         })
         .unwrap_or_else(|| "(no mods)".to_owned())
-}
-
-/// One checklist row: workshop item id, the mods it bundles (from the
-/// stored metadata, not a fresh disk walk), and when the stored copy
-/// was captured.
-fn describe_mod(mod_entry: &StoredMod) -> String {
-    let names: Vec<String> = mod_entry
-        .mods
-        .iter()
-        .map(|m| m.title.clone().unwrap_or_else(|| m.name.clone()))
-        .collect();
-    let updated = if mod_entry.time_updated == 0 {
-        "unknown".to_owned()
-    } else {
-        fmt::format_date_utc(mod_entry.time_updated)
-    };
-    format!(
-        "{}  {}  updated {}",
-        mod_entry.id,
-        if names.is_empty() {
-            "(no mods)".to_owned()
-        } else {
-            names.join(", ")
-        },
-        updated
-    )
 }

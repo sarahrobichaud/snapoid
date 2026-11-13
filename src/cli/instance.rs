@@ -31,6 +31,10 @@ pub enum InstanceCommand {
         /// defaults to 'snapoid', passing this changes it
         #[arg(long)]
         admin_password: Option<String>,
+        /// Pass `-debug` (enables the game's debug log channels, e.g. the
+        /// checksum dumps read from debuglog.cfg / debuglog-server.cfg)
+        #[arg(long)]
+        debug: bool,
     },
     /// Reset the instance profile to fresh (deletes saves, settings, mods)
     Reset,
@@ -82,6 +86,7 @@ pub fn run(name: Option<String>, command: Option<InstanceCommand>) -> anyhow::Re
             server,
             nosteam,
             admin_password,
+            debug,
         }) => {
             let store = open_store()?;
             let name = resolve_name(&store, name)?;
@@ -90,6 +95,7 @@ pub fn run(name: Option<String>, command: Option<InstanceCommand>) -> anyhow::Re
                 server,
                 nosteam,
                 admin_password,
+                debug,
             };
             let plan = snapoid::launch::plan(&instance, &options)?;
             report::print_launched(&instance);

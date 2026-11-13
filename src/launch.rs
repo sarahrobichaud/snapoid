@@ -41,6 +41,9 @@ pub struct LaunchOptions {
     /// (changing the password); otherwise the default is used on the
     /// server's first launch only, and the password persists after.
     pub admin_password: Option<String>,
+    /// Pass `-debug` (enables the game's debug log channels, read from
+    /// debuglog.cfg / debuglog-server.cfg in the profile).
+    pub debug: bool,
 }
 
 /// Admin password used when none was given and the server has none yet.
@@ -100,6 +103,9 @@ pub fn plan(instance: &GameInstance, options: &LaunchOptions) -> Result<LaunchPl
     }
     if options.nosteam {
         args.push("-nosteam".to_owned());
+    }
+    if options.debug {
+        args.push("-debug".to_owned());
     }
 
     // ZombieBuddy's agent, the automated equivalent of the mod's manual
@@ -437,6 +443,41 @@ mod tests {
     }
 
     #[test]
+    fn debug_flag_reaches_the_game_args() {
+        let base = std::env::temp_dir().join(format!("snapoid-dbg-{}", std::process::id()));
+        let game = base.join("game");
+        std::fs::create_dir_all(game.join("jre64/bin")).unwrap();
+        std::fs::write(game.join("jre64/bin/java.exe"), "jvm").unwrap();
+        let instance = GameInstance {
+            name: "t".to_owned(),
+            version: "42.22.2".to_owned(),
+            revision: None,
+            dir: base.join("inst"),
+            game_dir: game,
+            profile_dir: base.join("profile"),
+            created: 0,
+        };
+        let options = |server: bool, debug: bool| LaunchOptions {
+            server,
+            nosteam: true,
+            admin_password: None,
+            debug,
+        };
+
+        // Off by default: no -debug anywhere.
+        let launched = plan(&instance, &options(false, false)).unwrap();
+        assert!(!launched.args.contains(&"-debug".to_owned()));
+
+        // Requested: the game arg is passed to both client and server.
+        let launched = plan(&instance, &options(false, true)).unwrap();
+        assert!(launched.args.contains(&"-debug".to_owned()));
+        let launched = plan(&instance, &options(true, true)).unwrap();
+        assert!(launched.args.contains(&"-debug".to_owned()));
+
+        std::fs::remove_dir_all(&base).unwrap();
+    }
+
+    #[test]
     fn server_password_set_on_first_launch_only() {
         let base = std::env::temp_dir().join(format!("snapoid-pw-{}", std::process::id()));
         let game = base.join("game");
@@ -456,6 +497,7 @@ mod tests {
             server: true,
             nosteam: true,
             admin_password: password,
+            debug: false,
         };
         let password_of = |plan: &LaunchPlan| {
             let index = plan
@@ -508,6 +550,7 @@ mod tests {
             server: false,
             nosteam: true,
             admin_password: None,
+            debug: false,
         };
 
         // Without the mod: no agent flag.

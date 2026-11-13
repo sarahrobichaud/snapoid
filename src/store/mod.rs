@@ -36,8 +36,8 @@ use crate::{info, warn};
 
 pub use games::StoredGame;
 pub use install::{
-    item_install_status, Activation, InstallOutcome, InstalledManifest, InstalledMod, ItemStatus,
-    ModRecord,
+    mod_install_status, Activation, InstallOutcome, InstalledManifest, InstalledMod, ModRecord,
+    ModStatus, SelectedMod,
 };
 pub use instances::GameInstance;
 pub use meta::Source;

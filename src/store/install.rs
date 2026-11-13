@@ -30,6 +30,7 @@ use crate::fsops::{copy_tree, measure_tree, Progress, ProgressFactory};
 use crate::launch;
 use crate::pz::compat::{self, Compatibility};
 use crate::pz::item::ModEntry;
+use crate::pz::mod_info;
 use crate::pz::version;
 use crate::pz::zombie_buddy;
 use crate::store::{GameInstance, StoredMod, Store};
@@ -55,6 +56,9 @@ pub struct InstalledMod {
     pub dir: Option<PathBuf>,
     /// Why the mod was skipped, when it was.
     pub skipped: Option<compat::Incompatibility>,
+    /// True when the install forced a mod past its declared version
+    /// range by rewriting its manifest (unsafe mode).
+    pub unsafe_install: bool,
 }
 
 /// The install manifest written into the profile's mods folder: what
@@ -78,6 +82,10 @@ pub struct ModRecord {
     pub time_updated: u64,
     /// The mod's title, when known.
     pub title: Option<String>,
+    /// True when the install forced the mod past its declared version
+    /// range by rewriting its manifest.
+    #[serde(default)]
+    pub unsafe_install: bool,
 }
 
 /// The install manifest itself.
@@ -102,63 +110,50 @@ impl InstalledManifest {
     }
 }
 
-/// What the install manifest says about a stored item relative to the
-/// instance's installed mods, over the mods that would install on the
-/// instance's game version.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum ItemStatus {
-    /// Nothing bundled is installed yet.
-    New,
-    /// Everything that would install is already installed at the
-    /// store's version.
-    UpToDate,
-    /// Installed, but the store holds a newer capture; `installed` is
-    /// the oldest recorded install time among the outdated mods.
-    UpdateAvailable { installed: u64 },
-    /// Some compatible mods are installed, some are not, and none is
-    /// outdated — installing completes the set.
-    Partial,
+/// One mod picked for install: the stored item it came from and the
+/// bundled mod to install from it. An item bundles several mods; the
+/// CLI picks them individually.
+#[derive(Debug)]
+pub struct SelectedMod<'a> {
+    /// The stored workshop item the mod is bundled in.
+    pub item: &'a StoredMod,
+    /// The bundled mod to install.
+    pub entry: &'a ModEntry,
+    /// Install in unsafe mode: force the mod past its declared
+    /// version range by rewriting its manifest.
+    pub unsafe_install: bool,
 }
 
-/// Classify a stored item against the instance's install manifest.
-pub fn item_install_status(
+/// What the install manifest says about one bundled mod relative to
+/// its stored version.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum ModStatus {
+    /// Not installed — or installed without a manifest record, which
+    /// cannot be told apart.
+    New,
+    /// Installed at the store's version.
+    UpToDate,
+    /// Installed, but the store holds a newer capture; `installed` is
+    /// the recorded install time.
+    UpdateAvailable { installed: u64 },
+}
+
+/// Classify one bundled mod against the instance's install manifest.
+/// Callers pass mods that would install on the game version — for the
+/// rest the status is meaningless.
+pub fn mod_install_status(
     item: &StoredMod,
-    version: &str,
+    entry: &ModEntry,
     manifest: &InstalledManifest,
-) -> ItemStatus {
-    let mut any_new = false;
-    let mut any_record = false;
-    let mut outdated: Option<u64> = None;
-    for entry in &item.mods {
-        if !matches!(
-            compat::mod_compatibility(entry, version),
-            Compatibility::Compatible
-        ) {
-            continue;
-        }
-        match manifest.record(&entry.name) {
-            None => any_new = true,
-            Some(record) => {
-                any_record = true;
-                if item.time_updated > record.time_updated {
-                    outdated = Some(
-                        outdated
-                            .map_or(record.time_updated, |seen| seen.min(record.time_updated)),
-                    );
-                }
+) -> ModStatus {
+    match manifest.record(&entry.name) {
+        None => ModStatus::New,
+        Some(record) if item.time_updated > record.time_updated => {
+            ModStatus::UpdateAvailable {
+                installed: record.time_updated,
             }
         }
-    }
-    if let Some(installed) = outdated {
-        ItemStatus::UpdateAvailable { installed }
-    } else if any_new {
-        if any_record {
-            ItemStatus::Partial
-        } else {
-            ItemStatus::New
-        }
-    } else {
-        ItemStatus::UpToDate
+        Some(_) => ModStatus::UpToDate,
     }
 }
 
@@ -296,6 +291,57 @@ impl Store {
         items: &[&StoredMod],
         progress: ProgressFactory,
     ) -> Result<InstallOutcome> {
+        self.instance_install_mods_with(instance, items, &[], progress)
+    }
+
+    /// The same install with a second set of items installed in unsafe
+    /// mode: mods whose declared version range excludes the instance's
+    /// game version are installed anyway, with the manifest the game
+    /// would read rewritten to that version (`versionMin=` pinned,
+    /// `versionMax=` dropped) and the display name tagged. Mods whose
+    /// incompatibility a manifest rewrite cannot fix (layout-only,
+    /// no selectable folder, no manifest at all) are still skipped
+    /// with their reason.
+    pub fn instance_install_mods_with(
+        &self,
+        instance: &GameInstance,
+        items: &[&StoredMod],
+        unsafe_items: &[&StoredMod],
+        progress: ProgressFactory,
+    ) -> Result<InstallOutcome> {
+        let selected: Vec<SelectedMod> = items
+            .iter()
+            .flat_map(|item| {
+                item.mods
+                    .iter()
+                    .map(|entry| SelectedMod {
+                        item,
+                        entry,
+                        unsafe_install: false,
+                    })
+            })
+            .chain(unsafe_items.iter().flat_map(|item| {
+                item.mods
+                    .iter()
+                    .map(|entry| SelectedMod {
+                        item,
+                        entry,
+                        unsafe_install: true,
+                    })
+            }))
+            .collect();
+        self.instance_install_selected(instance, &selected, progress)
+    }
+
+    /// Install individually picked mods: each [`SelectedMod`] is one
+    /// bundled mod with its item, so an item's mods can be installed
+    /// selectively instead of as a whole bundle.
+    pub fn instance_install_selected(
+        &self,
+        instance: &GameInstance,
+        selected: &[SelectedMod],
+        progress: ProgressFactory,
+    ) -> Result<InstallOutcome> {
         let mods_dir = instance.profile_dir.join("mods");
         fs::create_dir_all(&mods_dir)
             .with_context(|| format!("creating {}", mods_dir.display()))?;
@@ -312,17 +358,41 @@ impl Store {
         let mut activated: Vec<(String, &ModEntry)> = Vec::new();
         let mut no_id: Vec<String> = Vec::new();
         let mut zombie_buddy_dir: Option<PathBuf> = None;
-        for item in items {
-            for mod_entry in &item.mods {
-                let skipped = match compat::mod_compatibility(mod_entry, &instance.version) {
-                    Compatibility::Compatible => None,
-                    Compatibility::Incompatible(reason) => Some(reason),
-                    Compatibility::Unknown => {
+        for select in selected {
+            let item = select.item;
+            let unsafe_install = select.unsafe_install;
+            let mod_entry = select.entry;
+            {
+                let verdict = compat::mod_compatibility(mod_entry, &instance.version);
+                // An unsafe install fixes exactly one failure mode: a
+                // declared version range excluding the running
+                // version — the manifest the game would read is
+                // rewritten. Everything else (layout-only, no
+                // selectable folder, no manifest at all, no signal)
+                // is skipped with its reason, unsafe request or not.
+                let (skipped, rewrite) = match (&verdict, unsafe_install) {
+                    (Compatibility::Compatible, _) => (None, None),
+                    (Compatibility::Unknown, _) => {
                         warn!(
                             "mod {} has no compatibility signal; skipping",
                             mod_entry.name
                         );
                         continue;
+                    }
+                    (Compatibility::Incompatible(reason), false) => (Some(reason.clone()), None),
+                    (
+                        Compatibility::Incompatible(compat::Incompatibility::DeclaredRange {
+                            manifest,
+                            ..
+                        }),
+                        true,
+                    ) => (None, Some((manifest.clone(), instance.version.clone()))),
+                    (Compatibility::Incompatible(reason), true) => {
+                        warn!(
+                            "mod {} cannot be installed unsafely; skipping",
+                            mod_entry.name
+                        );
+                        (Some(reason.clone()), None)
                     }
                 };
                 let outcome = match skipped {
@@ -334,14 +404,17 @@ impl Store {
                         time_updated: item.time_updated,
                         dir: None,
                         skipped: Some(reason),
+                        unsafe_install: false,
                     },
                     None => {
+                        let unsafe_installed = rewrite.is_some();
                         let dir = self.install_one(
                             &staging_root,
                             &mods_dir,
                             item,
                             mod_entry,
                             game,
+                            rewrite,
                             progress,
                         )?;
                         match &mod_entry.mod_id {
@@ -367,6 +440,7 @@ impl Store {
                             time_updated: item.time_updated,
                             dir: Some(dir),
                             skipped: None,
+                            unsafe_install: unsafe_installed,
                         }
                     }
                 };
@@ -391,6 +465,7 @@ impl Store {
         })
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn install_one(
         &self,
         staging_root: &Path,
@@ -398,6 +473,7 @@ impl Store {
         item: &StoredMod,
         mod_entry: &ModEntry,
         game: u64,
+        rewrite: Option<(compat::Manifest, String)>,
         progress: ProgressFactory,
     ) -> Result<PathBuf> {
         let source = item.dir.join("mods").join(&mod_entry.name);
@@ -435,6 +511,12 @@ impl Store {
             op.copy(&source, &staging, progress.as_mut())?;
         }
         progress.finish();
+
+        // Unsafe install: rewrite the manifest the game would read,
+        // inside the staged copy — the store copy stays untouched.
+        if let Some((manifest, game_version)) = rewrite {
+            rewrite_manifest_unsafe(&staging, manifest, &mod_entry.name, &game_version)?;
+        }
 
         // The old copy comes out only once the new one is fully
         // staged; the rename is same-filesystem, so it cannot fail
@@ -508,6 +590,33 @@ pub(crate) fn activate_install(
     ))
 }
 
+/// Rewrite the manifest the game would read on this version, inside a
+/// staged mod copy, for an unsafe install: its declared range is
+/// pinned to the running game version and its display name tagged.
+/// The manifest sits where compat found it — the staged copy holds
+/// exactly what the copy operations put there.
+fn rewrite_manifest_unsafe(
+    staging: &Path,
+    manifest: compat::Manifest,
+    mod_name: &str,
+    game_version: &str,
+) -> Result<()> {
+    let path = match manifest {
+        compat::Manifest::Root => staging.join("mod.info"),
+        compat::Manifest::Common => staging.join("common").join("mod.info"),
+        compat::Manifest::Folder(name) => staging.join(name).join("mod.info"),
+    };
+    let text =
+        fs::read_to_string(&path).with_context(|| format!("reading {}", path.display()))?;
+    let rewritten = mod_info::unsafe_text(&text, mod_name, game_version);
+    fs::write(&path, rewritten).with_context(|| format!("writing {}", path.display()))?;
+    warn!(
+        "unsafe install: {}'s manifest rewritten to version {}",
+        mod_name, game_version
+    );
+    Ok(())
+}
+
 /// Read the profile's install manifest; an empty one when absent or
 /// unreadable (the manifest is snapoid's own bookkeeping — a broken
 /// file must not block an install).
@@ -544,6 +653,7 @@ fn write_installed_manifest(mods_dir: &Path, installed: &[InstalledMod]) -> Resu
             item_id: outcome.item_id,
             time_updated: outcome.time_updated,
             title: outcome.title.clone(),
+            unsafe_install: outcome.unsafe_install,
         });
     }
     let path = mods_dir.join(INSTALLED_MANIFEST);
@@ -1228,13 +1338,66 @@ mod tests {
     }
 
     #[test]
-    fn item_status_reflects_the_manifest() -> Result<()> {
+    fn unsafe_install_forces_a_declared_range_and_tags_the_name() -> Result<()> {
+        let (store, instance, item, base) = fixture("unsafe")?;
+        let outcome =
+            store.instance_install_mods_with(&instance, &[], &[&item], noop_progress)?;
+
+        // Bounded Mod declares 42.16-42.19; the unsafe install copies
+        // the folder the game would select and rewrites its manifest
+        // to the running version, tagging the display name.
+        let bounded = mod_outcome(&outcome.mods, "Bounded Mod");
+        assert!(bounded.unsafe_install);
+        let dir = bounded.dir.as_ref().unwrap();
+        let rewritten = fs::read_to_string(dir.join("42.16/mod.info"))?;
+        assert!(rewritten.contains("name=Bounded [unsafe]"));
+        assert!(rewritten.contains("versionMin=42.22.2"));
+        assert!(!rewritten.contains("versionMax"));
+        assert_eq!(bounded.skipped, None);
+
+        // The compatible mods of the same item install normally.
+        assert!(!mod_outcome(&outcome.mods, "Hybrid Mod").unsafe_install);
+        assert!(mod_outcome(&outcome.mods, "Hybrid Mod").dir.is_some());
+
+        // The forced mod is activated like any other.
+        assert_eq!(
+            outcome.activation.mod_ids,
+            vec!["BM", "HM", "MO", "PM"]
+        );
+
+        // The manifest record remembers the unsafe install.
+        let manifest = store.instance_installed_manifest(&instance);
+        assert!(manifest.record("Bounded Mod").unwrap().unsafe_install);
+        assert!(!manifest.record("Hybrid Mod").unwrap().unsafe_install);
+
+        fs::remove_dir_all(&base)?;
+        Ok(())
+    }
+
+    #[test]
+    fn unsafe_install_cannot_fix_a_layout_only_mod() -> Result<()> {
+        let (store, instance, item, base) = fixture("unsafe-layout")?;
+        let outcome =
+            store.instance_install_mods_with(&instance, &[], &[&item], noop_progress)?;
+
+        // B41 Only ships the B41 layout; no manifest rewrite can make
+        // a B42 loader read it.
+        let b41 = mod_outcome(&outcome.mods, "B41 Only");
+        assert!(b41.dir.is_none());
+        assert!(b41.skipped.is_some());
+        assert!(!b41.unsafe_install);
+        assert!(!instance.profile_dir.join("mods/B41 Only").exists());
+
+        fs::remove_dir_all(&base)?;
+        Ok(())
+    }
+
+    #[test]
+    fn mod_status_reflects_the_manifest() -> Result<()> {
         let base = std::env::temp_dir().join(format!("snapoid-status-{}", std::process::id()));
         let item_dir = base.join("item-1");
         fs::create_dir_all(item_dir.join("mods/Plain/42"))?;
-        fs::create_dir_all(item_dir.join("mods/Extra/42"))?;
         fs::write(item_dir.join("mods/Plain/42/mod.info"), "name=P\nid=P\n")?;
-        fs::write(item_dir.join("mods/Extra/42/mod.info"), "name=E\nid=E\n")?;
         let mut item = StoredMod {
             id: 1,
             time_updated: 10,
@@ -1245,59 +1408,86 @@ mod tests {
             mods: inspect_item(&item_dir),
             layout: None,
         };
+        let entry = &item.mods[0];
 
         let installed = InstalledManifest::default();
         assert_eq!(
-            item_install_status(&item, "42.22.2", &installed),
-            ItemStatus::New
+            mod_install_status(&item, entry, &installed),
+            ModStatus::New
         );
 
         let manifest = |records| InstalledManifest {
             format: 1,
             mods: records,
         };
-        let up_to_date = || {
-            vec![
-                ModRecord {
-                    name: "Plain".to_owned(),
-                    mod_id: None,
-                    item_id: 1,
-                    time_updated: 10,
-                    title: None,
-                },
-                ModRecord {
-                    name: "Extra".to_owned(),
-                    mod_id: None,
-                    item_id: 1,
-                    time_updated: 10,
-                    title: None,
-                },
-            ]
+        let record = |time_updated| ModRecord {
+            name: "Plain".to_owned(),
+            mod_id: None,
+            item_id: 1,
+            time_updated,
+            title: None,
+            unsafe_install: false,
         };
         assert_eq!(
-            item_install_status(&item, "42.22.2", &manifest(up_to_date())),
-            ItemStatus::UpToDate
+            mod_install_status(&item, entry, &manifest(vec![record(10)])),
+            ModStatus::UpToDate
         );
 
         // The store captures a newer version.
         item.time_updated = 20;
         assert_eq!(
-            item_install_status(&item, "42.22.2", &manifest(up_to_date())),
-            ItemStatus::UpdateAvailable { installed: 10 }
+            mod_install_status(&item, entry, &manifest(vec![record(10)])),
+            ModStatus::UpdateAvailable { installed: 10 }
         );
 
-        // Only one of the bundled mods is recorded: installing
-        // completes the set.
-        let partial = vec![ModRecord {
-            name: "Plain".to_owned(),
-            mod_id: None,
-            item_id: 1,
-            time_updated: 20,
-            title: None,
-        }];
+        // A record newer than the store (a downgrade in the store) is
+        // not an update prompt.
         assert_eq!(
-            item_install_status(&item, "42.22.2", &manifest(partial)),
-            ItemStatus::Partial
+            mod_install_status(&item, entry, &manifest(vec![record(30)])),
+            ModStatus::UpToDate
+        );
+
+        fs::remove_dir_all(&base)?;
+        Ok(())
+    }
+
+    #[test]
+    fn installs_individually_selected_mods_of_an_item() -> Result<()> {
+        let (store, instance, item, base) = fixture("select")?;
+
+        // The item bundles five mods; pick two, one of them unsafely
+        // (Bounded Mod's declared range excludes 42.22.2).
+        let selected: Vec<SelectedMod> = item
+            .mods
+            .iter()
+            .filter(|entry| entry.name == "Hybrid Mod" || entry.name == "Bounded Mod")
+            .map(|entry| SelectedMod {
+                item: &item,
+                entry,
+                unsafe_install: entry.name == "Bounded Mod",
+            })
+            .collect();
+        let outcome = store.instance_install_selected(&instance, &selected, noop_progress)?;
+
+        let names: Vec<&str> = outcome
+            .mods
+            .iter()
+            .map(|m| m.name.as_str())
+            .collect();
+        assert_eq!(names, vec!["Bounded Mod", "Hybrid Mod"]);
+        assert!(instance
+            .profile_dir
+            .join("mods/Hybrid Mod/42.20/media/new.lua")
+            .is_file());
+        let rewritten = fs::read_to_string(
+            instance
+                .profile_dir
+                .join("mods/Bounded Mod/42.16/mod.info"),
+        )?;
+        assert!(rewritten.contains("versionMin=42.22.2"));
+        assert_eq!(
+            outcome.activation.mod_ids,
+            vec!["BM", "HM"]
         );
 
         fs::remove_dir_all(&base)?;

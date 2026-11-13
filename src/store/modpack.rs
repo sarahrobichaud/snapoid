@@ -258,6 +258,7 @@ impl Store {
                     time_updated: provenance.map_or(0, |r| r.time_updated),
                     dir: None,
                     skipped: Some(reason),
+                    unsafe_install: false,
                 },
                 None => {
                     let dir = extract_one(
@@ -290,6 +291,7 @@ impl Store {
                         time_updated: provenance.map_or(0, |r| r.time_updated),
                         dir: Some(dir),
                         skipped: None,
+                        unsafe_install: false,
                     }
                 }
             };
