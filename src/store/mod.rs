@@ -22,6 +22,7 @@ pub mod install;
 pub mod instances;
 pub mod meta;
 pub mod mods;
+pub mod modpack;
 pub mod snapshots;
 
 use std::fs;
@@ -34,10 +35,14 @@ use crate::platform;
 use crate::{info, warn};
 
 pub use games::StoredGame;
-pub use install::{Activation, InstallOutcome, InstalledMod};
+pub use install::{
+    item_install_status, Activation, InstallOutcome, InstalledManifest, InstalledMod, ItemStatus,
+    ModRecord,
+};
 pub use instances::GameInstance;
 pub use meta::Source;
 pub use mods::StoredMod;
+pub use modpack::{ModpackManifest, PackedModpack};
 pub use snapshots::SnapshotRef;
 
 /// Store errors callers may want to match on.

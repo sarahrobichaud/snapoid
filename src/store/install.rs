@@ -8,6 +8,11 @@
 //! loads, so the copy is the mod dir minus the version folders and
 //! `common/` (which B41 ignores entirely).
 //!
+//! Exception — ZombieBuddy copies whole: its loader and agent jar live
+//! in `libs/`, outside anything the game's loader reads, and the
+//! profile copy must be complete — the game's own dialog points users
+//! at that folder, and the agent install reads the loader from it.
+//!
 //! Staging happens in the instance dir, never inside `profile/mods/`:
 //! the game scans that folder and would recognize a staging dir
 //! containing `common/mod.info` as a mod.
@@ -18,6 +23,7 @@ use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use anyhow::{Context as _, Result};
+use serde::{Deserialize, Serialize};
 
 use crate::fmt;
 use crate::fsops::{copy_tree, measure_tree, Progress, ProgressFactory};
@@ -25,6 +31,7 @@ use crate::launch;
 use crate::pz::compat::{self, Compatibility};
 use crate::pz::item::ModEntry;
 use crate::pz::version;
+use crate::pz::zombie_buddy;
 use crate::store::{GameInstance, StoredMod, Store};
 use crate::{debug, info, warn};
 
@@ -38,10 +45,121 @@ pub struct InstalledMod {
     pub name: String,
     /// The Mod ID, when the manifest declares one.
     pub mod_id: Option<String>,
+    /// The mod's title, when a manifest or the workshop item declares
+    /// one.
+    pub title: Option<String>,
+    /// Steam's timeupdated for the item at install time; 0 when the
+    /// install carries no store provenance (a modpack).
+    pub time_updated: u64,
     /// The installed folder in the profile, when installed.
     pub dir: Option<PathBuf>,
     /// Why the mod was skipped, when it was.
     pub skipped: Option<compat::Incompatibility>,
+}
+
+/// The install manifest written into the profile's mods folder: what
+/// snapoid installed there, and from which store version, so a later
+/// install can offer updates instead of blind reinstalls. A plain file
+/// next to default.txt — the game only scans mod folders.
+pub const INSTALLED_MANIFEST: &str = "snapoid-mods.json";
+
+/// One installed mod's provenance.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ModRecord {
+    /// Mod folder name in the profile's mods folder.
+    pub name: String,
+    /// The Mod ID, when the manifest declared one.
+    pub mod_id: Option<String>,
+    /// Workshop item the mod came from; 0 when the install carried no
+    /// store provenance (a modpack).
+    pub item_id: u64,
+    /// Steam's timeupdated for the item at install time; 0 when
+    /// unknown.
+    pub time_updated: u64,
+    /// The mod's title, when known.
+    pub title: Option<String>,
+}
+
+/// The install manifest itself.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct InstalledManifest {
+    pub format: u32,
+    pub mods: Vec<ModRecord>,
+}
+
+impl InstalledManifest {
+    /// The record for a mod folder name, when one is kept.
+    pub fn record(&self, name: &str) -> Option<&ModRecord> {
+        self.mods.iter().find(|r| r.name == name)
+    }
+
+    /// Insert or replace the record for a mod folder name.
+    fn upsert(&mut self, record: ModRecord) {
+        match self.mods.iter_mut().find(|r| r.name == record.name) {
+            Some(existing) => *existing = record,
+            None => self.mods.push(record),
+        }
+    }
+}
+
+/// What the install manifest says about a stored item relative to the
+/// instance's installed mods, over the mods that would install on the
+/// instance's game version.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum ItemStatus {
+    /// Nothing bundled is installed yet.
+    New,
+    /// Everything that would install is already installed at the
+    /// store's version.
+    UpToDate,
+    /// Installed, but the store holds a newer capture; `installed` is
+    /// the oldest recorded install time among the outdated mods.
+    UpdateAvailable { installed: u64 },
+    /// Some compatible mods are installed, some are not, and none is
+    /// outdated — installing completes the set.
+    Partial,
+}
+
+/// Classify a stored item against the instance's install manifest.
+pub fn item_install_status(
+    item: &StoredMod,
+    version: &str,
+    manifest: &InstalledManifest,
+) -> ItemStatus {
+    let mut any_new = false;
+    let mut any_record = false;
+    let mut outdated: Option<u64> = None;
+    for entry in &item.mods {
+        if !matches!(
+            compat::mod_compatibility(entry, version),
+            Compatibility::Compatible
+        ) {
+            continue;
+        }
+        match manifest.record(&entry.name) {
+            None => any_new = true,
+            Some(record) => {
+                any_record = true;
+                if item.time_updated > record.time_updated {
+                    outdated = Some(
+                        outdated
+                            .map_or(record.time_updated, |seen| seen.min(record.time_updated)),
+                    );
+                }
+            }
+        }
+    }
+    if let Some(installed) = outdated {
+        ItemStatus::UpdateAvailable { installed }
+    } else if any_new {
+        if any_record {
+            ItemStatus::Partial
+        } else {
+            ItemStatus::New
+        }
+    } else {
+        ItemStatus::UpToDate
+    }
 }
 
 /// The activation artifacts written for an install: the client's
@@ -66,6 +184,10 @@ pub struct Activation {
 pub struct InstallOutcome {
     pub mods: Vec<InstalledMod>,
     pub activation: Activation,
+    /// ZombieBuddy agent files copied into the instance's agent dir
+    /// (and the game folder, where the Windows loader needs them);
+    /// empty when the mod is not among the installed ones.
+    pub agent_files: Vec<String>,
 }
 
 /// One copy operation reproducing part of what the game loads.
@@ -104,6 +226,19 @@ impl CopyOp {
 /// The copy operations that reproduce what the game would load from
 /// the mod on a game version int.
 fn copy_ops(mod_entry: &ModEntry, game: u64) -> Vec<CopyOp> {
+    // ZombieBuddy copies whole: the loader and agent jar in libs/ are
+    // outside anything the game's loader reads, and the profile copy
+    // must be complete (the game's own dialog points users at it, and
+    // the agent install reads the loader from it).
+    if zombie_buddy::is_mod_name(&mod_entry.name)
+        || mod_entry
+            .mod_id
+            .as_deref()
+            .is_some_and(zombie_buddy::is_mod_name)
+    {
+        return vec![CopyOp::RootMinus { exclude: Vec::new() }];
+    }
+
     let floor = 42 * 1000;
     if game < floor {
         // B41: the root layout loads; version folders and common/ do
@@ -137,11 +272,17 @@ fn copy_ops(mod_entry: &ModEntry, game: u64) -> Vec<CopyOp> {
 }
 
 impl Store {
+    /// The instance's install manifest: what snapoid has installed
+    /// into its profile and from which store versions.
+    pub fn instance_installed_manifest(&self, instance: &GameInstance) -> InstalledManifest {
+        read_installed_manifest(&instance.profile_dir.join("mods"))
+    }
+
     /// Install the bundled mods of `items` into the instance's profile
     /// mods folder. Only what the game would load on the instance's
-    /// game version is copied; mods the game would not make available
-    /// are skipped with their reason. Re-installing a mod replaces the
-    /// previous copy.
+    /// game version is copied (ZombieBuddy: its whole folder); mods the
+    /// game would not make available are skipped with their reason.
+    /// Re-installing a mod replaces the previous copy.
     ///
     /// The installed set is then activated: the client's
     /// mods/default.txt and the server config's Mods= line are written
@@ -170,6 +311,7 @@ impl Store {
         let mut installed = Vec::new();
         let mut activated: Vec<(String, &ModEntry)> = Vec::new();
         let mut no_id: Vec<String> = Vec::new();
+        let mut zombie_buddy_dir: Option<PathBuf> = None;
         for item in items {
             for mod_entry in &item.mods {
                 let skipped = match compat::mod_compatibility(mod_entry, &instance.version) {
@@ -188,6 +330,8 @@ impl Store {
                         item_id: item.id,
                         name: mod_entry.name.clone(),
                         mod_id: mod_entry.mod_id.clone(),
+                        title: mod_entry.title.clone().or_else(|| item.title.clone()),
+                        time_updated: item.time_updated,
                         dir: None,
                         skipped: Some(reason),
                     },
@@ -207,10 +351,20 @@ impl Store {
                                 mod_entry.name
                             )),
                         }
+                        if zombie_buddy::is_mod_name(&mod_entry.name)
+                            || mod_entry
+                                .mod_id
+                                .as_deref()
+                                .is_some_and(zombie_buddy::is_mod_name)
+                        {
+                            zombie_buddy_dir = Some(dir.clone());
+                        }
                         InstalledMod {
                             item_id: item.id,
                             name: mod_entry.name.clone(),
                             mod_id: mod_entry.mod_id.clone(),
+                            title: mod_entry.title.clone().or_else(|| item.title.clone()),
+                            time_updated: item.time_updated,
                             dir: Some(dir),
                             skipped: None,
                         }
@@ -220,29 +374,20 @@ impl Store {
             }
         }
 
-        let (mod_ids, mut warnings) = activation_order(&activated);
-        warnings.extend(no_id);
-        ensure_reset_sentinel(&instance.profile_dir, &instance.version)?;
-        let default_txt = instance.profile_dir.join("mods").join("default.txt");
-        let maps_block = existing_maps_block(&default_txt);
-        fs::write(&default_txt, default_txt_text(&mod_ids, &maps_block))
-            .with_context(|| format!("writing {}", default_txt.display()))?;
-        let server_ini = instance
-            .profile_dir
-            .join("Server")
-            .join(format!("{}.ini", launch::server_name(instance)));
-        write_server_ini(&server_ini, &mod_ids, &instance.name)?;
+        let (activation, agent_files) = activate_install(
+            instance,
+            &installed,
+            &activated,
+            no_id,
+            zombie_buddy_dir.as_deref(),
+        )?;
 
         fs::remove_dir_all(&staging_root)
             .with_context(|| format!("clearing {}", staging_root.display()))?;
         Ok(InstallOutcome {
             mods: installed,
-            activation: Activation {
-                mod_ids,
-                warnings,
-                default_txt,
-                server_ini,
-            },
+            activation,
+            agent_files,
         })
     }
 
@@ -265,6 +410,7 @@ impl Store {
         fs::create_dir_all(&staging)
             .with_context(|| format!("creating staging dir {}", staging.display()))?;
 
+        let started = Instant::now();
         let ops = copy_ops(mod_entry, game);
         if ops.is_empty() {
             anyhow::bail!(
@@ -273,8 +419,6 @@ impl Store {
                 game
             );
         }
-
-        let started = Instant::now();
         let mut total_files = 0u64;
         let mut total_bytes = 0u64;
         for op in &ops {
@@ -312,10 +456,106 @@ impl Store {
     }
 }
 
+/// Activate the installed mods and write the artifacts every install
+/// path shares: the dependency-aware load order (ZombieBuddy promoted
+/// first), the agent install, the reset sentinel, the client's
+/// mods/default.txt and the server config's Mods= line, and the
+/// install manifest recording what was installed from where. Returns
+/// the activation record and the ZombieBuddy agent file names.
+pub(crate) fn activate_install(
+    instance: &GameInstance,
+    installed: &[InstalledMod],
+    activated: &[(String, &ModEntry)],
+    extra_warnings: Vec<String>,
+    zombie_buddy_dir: Option<&Path>,
+) -> Result<(Activation, Vec<String>)> {
+    write_installed_manifest(&instance.profile_dir.join("mods"), installed)?;
+    let (mut mod_ids, mut warnings) = activation_order(activated);
+    warnings.extend(extra_warnings);
+    // The agent install needs the mod in place, so it runs after the
+    // files land; the load-order promotion happens before anything is
+    // written, so every artifact agrees on ZombieBuddy loading first.
+    // The agent goes into the instance's own agent/ dir — never the
+    // shared per-version game folder, which would leak the library
+    // into every instance of that version.
+    zombie_buddy::promote_first(&mut mod_ids);
+    let agent_files = match zombie_buddy_dir {
+        Some(dir) => zombie_buddy::install_agent(
+            dir,
+            &instance.dir.join(zombie_buddy::AGENT_DIR),
+            &instance.game_dir,
+        )?,
+        None => Vec::new(),
+    };
+    ensure_reset_sentinel(&instance.profile_dir, &instance.version)?;
+    let default_txt = instance.profile_dir.join("mods").join("default.txt");
+    let maps_block = existing_maps_block(&default_txt);
+    fs::write(&default_txt, default_txt_text(&mod_ids, &maps_block))
+        .with_context(|| format!("writing {}", default_txt.display()))?;
+    let server_ini = instance
+        .profile_dir
+        .join("Server")
+        .join(format!("{}.ini", launch::server_name(instance)));
+    write_server_ini(&server_ini, &mod_ids, &instance.name)?;
+    Ok((
+        Activation {
+            mod_ids,
+            warnings,
+            default_txt,
+            server_ini,
+        },
+        agent_files,
+    ))
+}
+
+/// Read the profile's install manifest; an empty one when absent or
+/// unreadable (the manifest is snapoid's own bookkeeping — a broken
+/// file must not block an install).
+pub(crate) fn read_installed_manifest(mods_dir: &Path) -> InstalledManifest {
+    let path = mods_dir.join(INSTALLED_MANIFEST);
+    match fs::read_to_string(&path) {
+        Ok(text) => match serde_json::from_str(&text) {
+            Ok(manifest) => manifest,
+            Err(error) => {
+                warn!(
+                    "ignoring unreadable install manifest {}: {error}",
+                    path.display()
+                );
+                InstalledManifest::default()
+            }
+        },
+        Err(_) => InstalledManifest::default(),
+    }
+}
+
+/// Merge `installed` into the profile's install manifest and write it
+/// back: records for mod folders that no longer exist are dropped, and
+/// everything installed here is recorded with its provenance.
+fn write_installed_manifest(mods_dir: &Path, installed: &[InstalledMod]) -> Result<()> {
+    let mut manifest = read_installed_manifest(mods_dir);
+    manifest.format = 1;
+    manifest
+        .mods
+        .retain(|record| mods_dir.join(&record.name).is_dir());
+    for outcome in installed.iter().filter(|m| m.dir.is_some()) {
+        manifest.upsert(ModRecord {
+            name: outcome.name.clone(),
+            mod_id: outcome.mod_id.clone(),
+            item_id: outcome.item_id,
+            time_updated: outcome.time_updated,
+            title: outcome.title.clone(),
+        });
+    }
+    let path = mods_dir.join(INSTALLED_MANIFEST);
+    let text = serde_json::to_vec_pretty(&manifest)?;
+    fs::write(&path, text).with_context(|| format!("writing {}", path.display()))
+}
+
 /// Order the installed mods for activation: `require=` dependencies
 /// first, then `loadModAfter=`/`loadModBefore=` constraints, with the
 /// install order breaking ties. Unresolvable references and cycles are
 /// warned about, never fatal — the game drops what it cannot resolve.
+/// (ZombieBuddy is promoted first by the caller.)
 fn activation_order(installed: &[(String, &ModEntry)]) -> (Vec<String>, Vec<String>) {
     let mut warnings = Vec::new();
     let position: HashMap<&String, usize> = installed
@@ -578,6 +818,95 @@ mod tests {
     }
 
     #[test]
+    fn zombie_buddy_gets_its_agent_installed_and_loads_first() -> Result<()> {
+        let (store, instance, _item, base) = fixture("zb")?;
+
+        // A second item bundling ZombieBuddy, shaped like the real
+        // workshop mod: version folders plus a libs/ dir with the
+        // native loader and the agent jar.
+        let item_dir = base.join("item-456");
+        let mods = item_dir.join("mods");
+        fs::create_dir_all(mods.join("ZombieBuddy/42/media"))?;
+        fs::create_dir_all(mods.join("ZombieBuddy/libs"))?;
+        fs::write(
+            mods.join("ZombieBuddy/42/mod.info"),
+            "name=ZombieBuddy\nid=ZombieBuddy\n",
+        )?;
+        fs::write(mods.join("ZombieBuddy/42/media/buddy.lua"), "lua")?;
+        fs::write(mods.join("ZombieBuddy/libs/zbNative.dll"), "loader")?;
+        fs::write(mods.join("ZombieBuddy/libs/ZombieBuddy.jar"), "agent jar")?;
+        fs::write(mods.join("ZombieBuddy/libs/ZombieBuddy.jar.zbs"), "signature")?;
+        let zombie_buddy_item = StoredMod {
+            id: 456,
+            time_updated: 1,
+            dir: item_dir.clone(),
+            created: 1,
+            title: None,
+            source: Some(Source::WorkshopDisk),
+            mods: inspect_item(&item_dir),
+            layout: None,
+        };
+
+        // ZombieBuddy installs after another mod, yet must load first.
+        let outcome = store.instance_install_mods(
+            &instance,
+            &[&_item, &zombie_buddy_item],
+            noop_progress,
+        )?;
+
+        // The whole mod folder lands in the profile (the ZombieBuddy
+        // exception): libs/ included, so the profile copy is complete.
+        assert!(instance
+            .profile_dir
+            .join("mods/ZombieBuddy/libs/zbNative.dll")
+            .is_file());
+
+        // The agent files are copied into the instance's own agent/
+        // dir; the jar (with its sidecar) also lands in the game
+        // folder, where the Windows loader resolves it relative to the
+        // game's working directory. The loader itself never does.
+        assert_eq!(
+            outcome.agent_files,
+            vec!["zbNative.dll", "ZombieBuddy.jar", "ZombieBuddy.jar.zbs"]
+        );
+        assert_eq!(
+            fs::read(instance.dir.join("agent/zbNative.dll"))?,
+            b"loader"
+        );
+        assert_eq!(
+            fs::read(instance.dir.join("agent/ZombieBuddy.jar"))?,
+            b"agent jar"
+        );
+        assert_eq!(
+            fs::read(instance.game_dir.join("ZombieBuddy.jar"))?,
+            b"agent jar"
+        );
+        assert!(
+            !instance.game_dir.join("zbNative.dll").exists(),
+            "the loader must stay out of the shared game folder"
+        );
+
+        // Load order: ZombieBuddy first, everywhere (default.txt and
+        // the server's Mods= line).
+        assert_eq!(
+            outcome.activation.mod_ids,
+            vec!["ZombieBuddy", "HM", "MO", "PM"]
+        );
+        let default_txt = fs::read_to_string(instance.profile_dir.join("mods/default.txt"))?;
+        assert!(default_txt.contains("mod = ZombieBuddy,\n    mod = HM,"));
+        let ini = fs::read_to_string(
+            instance
+                .profile_dir
+                .join("Server")
+                .join("snapoid_server_test.ini"),
+        )?;
+        assert_eq!(ini, "PublicName=test\nMods=ZombieBuddy;HM;MO;PM\n");
+
+        fs::remove_dir_all(&base)?;
+        Ok(())
+    }
+
+    #[test]
     fn installs_only_what_the_game_loads() -> Result<()> {
         let (store, instance, item, base) = fixture("b42")?;
         let outcome = store.instance_install_mods(&instance, &[&item], noop_progress)?;
@@ -643,7 +972,8 @@ mod tests {
                 "Media Only",
                 "Patch Mod",
                 "default.txt",
-                "reset-mods-42_00.txt"
+                "reset-mods-42_00.txt",
+                "snapoid-mods.json"
             ]
         );
 
@@ -818,6 +1148,157 @@ mod tests {
         assert!(text.contains("Mods=A"));
         assert!(!text.contains("OLD"));
         assert!(text.contains("Password=secret"));
+
+        fs::remove_dir_all(&base)?;
+        Ok(())
+    }
+
+    #[test]
+    fn installing_writes_the_manifest() -> Result<()> {
+        let (store, instance, item, base) = fixture("manifest")?;
+        store.instance_install_mods(&instance, &[&item], noop_progress)?;
+
+        let manifest = store.instance_installed_manifest(&instance);
+        assert_eq!(manifest.format, 1);
+        // Only the mods that installed are recorded; the skipped ones
+        // (Bounded Mod, B41 Only) are not.
+        let names: Vec<&str> = manifest.mods.iter().map(|r| r.name.as_str()).collect();
+        assert_eq!(names, vec!["Hybrid Mod", "Media Only", "Patch Mod"]);
+        let hybrid = manifest.record("Hybrid Mod").unwrap();
+        assert_eq!(hybrid.item_id, 123);
+        assert_eq!(hybrid.time_updated, item.time_updated);
+        assert_eq!(hybrid.mod_id.as_deref(), Some("HM"));
+        assert!(manifest.record("Bounded Mod").is_none());
+
+        fs::remove_dir_all(&base)?;
+        Ok(())
+    }
+
+    #[test]
+    fn reinstalling_updates_the_manifest_record() -> Result<()> {
+        let (store, instance, mut item, base) = fixture("manifest-update")?;
+        store.instance_install_mods(&instance, &[&item], noop_progress)?;
+
+        // The workshop item updates; re-installing must move the
+        // record to the new version.
+        item.time_updated = 999;
+        store.instance_install_mods(&instance, &[&item], noop_progress)?;
+        let manifest = store.instance_installed_manifest(&instance);
+        assert_eq!(manifest.record("Hybrid Mod").unwrap().time_updated, 999);
+
+        fs::remove_dir_all(&base)?;
+        Ok(())
+    }
+
+    #[test]
+    fn the_manifest_keeps_records_of_untouched_mods() -> Result<()> {
+        let (store, instance, item, base) = fixture("manifest-keep")?;
+        store.instance_install_mods(&instance, &[&item], noop_progress)?;
+
+        // A later install of a different item must keep the first
+        // install's records, and drop records whose mod folder is
+        // gone from the profile.
+        fs::remove_dir_all(instance.profile_dir.join("mods/Patch Mod"))?;
+        let other_dir = base.join("item-789");
+        fs::create_dir_all(other_dir.join("mods/Other Mod/42"))?;
+        fs::write(
+            other_dir.join("mods/Other Mod/42/mod.info"),
+            "name=Other\nid=OM2\n",
+        )?;
+        let other = StoredMod {
+            id: 789,
+            time_updated: 7,
+            dir: other_dir.clone(),
+            created: 1,
+            title: None,
+            source: Some(Source::WorkshopDisk),
+            mods: inspect_item(&other_dir),
+            layout: None,
+        };
+        store.instance_install_mods(&instance, &[&other], noop_progress)?;
+
+        let manifest = store.instance_installed_manifest(&instance);
+        assert!(manifest.record("Hybrid Mod").is_some());
+        assert!(manifest.record("Media Only").is_some());
+        assert!(manifest.record("Patch Mod").is_none(), "stale");
+        assert_eq!(manifest.record("Other Mod").unwrap().item_id, 789);
+
+        fs::remove_dir_all(&base)?;
+        Ok(())
+    }
+
+    #[test]
+    fn item_status_reflects_the_manifest() -> Result<()> {
+        let base = std::env::temp_dir().join(format!("snapoid-status-{}", std::process::id()));
+        let item_dir = base.join("item-1");
+        fs::create_dir_all(item_dir.join("mods/Plain/42"))?;
+        fs::create_dir_all(item_dir.join("mods/Extra/42"))?;
+        fs::write(item_dir.join("mods/Plain/42/mod.info"), "name=P\nid=P\n")?;
+        fs::write(item_dir.join("mods/Extra/42/mod.info"), "name=E\nid=E\n")?;
+        let mut item = StoredMod {
+            id: 1,
+            time_updated: 10,
+            dir: item_dir.clone(),
+            created: 1,
+            title: None,
+            source: Some(Source::WorkshopDisk),
+            mods: inspect_item(&item_dir),
+            layout: None,
+        };
+
+        let installed = InstalledManifest::default();
+        assert_eq!(
+            item_install_status(&item, "42.22.2", &installed),
+            ItemStatus::New
+        );
+
+        let manifest = |records| InstalledManifest {
+            format: 1,
+            mods: records,
+        };
+        let up_to_date = || {
+            vec![
+                ModRecord {
+                    name: "Plain".to_owned(),
+                    mod_id: None,
+                    item_id: 1,
+                    time_updated: 10,
+                    title: None,
+                },
+                ModRecord {
+                    name: "Extra".to_owned(),
+                    mod_id: None,
+                    item_id: 1,
+                    time_updated: 10,
+                    title: None,
+                },
+            ]
+        };
+        assert_eq!(
+            item_install_status(&item, "42.22.2", &manifest(up_to_date())),
+            ItemStatus::UpToDate
+        );
+
+        // The store captures a newer version.
+        item.time_updated = 20;
+        assert_eq!(
+            item_install_status(&item, "42.22.2", &manifest(up_to_date())),
+            ItemStatus::UpdateAvailable { installed: 10 }
+        );
+
+        // Only one of the bundled mods is recorded: installing
+        // completes the set.
+        let partial = vec![ModRecord {
+            name: "Plain".to_owned(),
+            mod_id: None,
+            item_id: 1,
+            time_updated: 20,
+            title: None,
+        }];
+        assert_eq!(
+            item_install_status(&item, "42.22.2", &manifest(partial)),
+            ItemStatus::Partial
+        );
 
         fs::remove_dir_all(&base)?;
         Ok(())

@@ -7,6 +7,7 @@ pub mod item;
 pub mod mod_info;
 pub mod probe;
 pub mod version;
+pub mod zombie_buddy;
 
 /// Project Zomboid's Steam app ID.
 pub const APP_ID: u32 = 108600;

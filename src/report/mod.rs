@@ -12,7 +12,9 @@ use snapoid::pz::version;
 use snapoid::registry::Registry;
 use snapoid::scanner::workshop::{ModEntry, WorkshopItem};
 use snapoid::steam::SteamPaths;
-use snapoid::store::{GameInstance, InstallOutcome, Source, StoredGame, StoredMod};
+use snapoid::store::{
+    GameInstance, InstallOutcome, PackedModpack, Source, StoredGame, StoredMod,
+};
 
 /// Render the workshop inventory from `scan`: per item, one row per
 /// bundled mod with its layout, Mod ID, declared version range, and
@@ -367,6 +369,20 @@ fn is_inferred(mod_entry: &ModEntry) -> bool {
 
 /// Render the outcome of an install into an instance's profile: the
 /// copied and skipped mods, then the activation artifacts.
+/// Render the result of packing an instance's mods into a modpack.
+pub fn print_packed(packed: &PackedModpack) {
+    println!(
+        "\nPacked {} mod{} ({}) into {}",
+        packed.mods.len(),
+        plural(packed.mods.len()),
+        fmt::format_bytes(packed.bytes),
+        packed.path.display()
+    );
+    for name in &packed.mods {
+        println!("  {name}");
+    }
+}
+
 pub fn print_installed_mods(instance_name: &str, outcome: &InstallOutcome) {
     let done = outcome.mods.iter().filter(|m| m.dir.is_some()).count();
     println!(
@@ -405,6 +421,13 @@ pub fn print_installed_mods(instance_name: &str, outcome: &InstallOutcome) {
     }
     for warning in &activation.warnings {
         println!("  warning: {warning}");
+    }
+    if !outcome.agent_files.is_empty() {
+        println!(
+            "\nZombieBuddy agent installed: {}",
+            outcome.agent_files.join(", ")
+        );
+        println!("  (the agent is loaded automatically at launch)");
     }
     println!("  client list:   {}", activation.default_txt.display());
     println!("  server config: {}", activation.server_ini.display());

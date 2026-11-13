@@ -20,7 +20,9 @@ use anyhow::{Context as _, Result};
 
 use crate::fsops::sanitize_name;
 use crate::platform;
+use crate::pz::zombie_buddy;
 use crate::store::GameInstance;
+use crate::warn;
 
 /// Everything needed to spawn one game process.
 pub struct LaunchPlan {
@@ -43,6 +45,12 @@ pub struct LaunchOptions {
 
 /// Admin password used when none was given and the server has none yet.
 pub const DEFAULT_ADMIN_PASSWORD: &str = "snapoid";
+
+/// The main classes of the client and dedicated-server launch lines:
+/// everything before them is JVM options, everything after them game
+/// arguments.
+const CLIENT_MAIN_CLASS: &str = "zombie.gameStates.MainScreenState";
+const SERVER_MAIN_CLASS: &str = "zombie.network.GameServer";
 
 /// Build the launch plan for `instance`. The instance profile directory
 /// is created if missing, so legacy instances (without one) launch too.
@@ -94,7 +102,62 @@ pub fn plan(instance: &GameInstance, options: &LaunchOptions) -> Result<LaunchPl
         args.push("-nosteam".to_owned());
     }
 
+    // ZombieBuddy's agent, the automated equivalent of the mod's manual
+    // "copy the files and add -agentlib:zbNative to the launch options"
+    // steps. The flag must be a JVM option — before the main class —
+    // or it reaches the game as a plain argument and the agent never
+    // loads (the mod's own docs call this out for .bat launches).
+    if zombie_buddy::installed_in(&instance.profile_dir) {
+        let mod_dir = instance
+            .profile_dir
+            .join("mods")
+            .join(zombie_buddy::MOD_ID);
+        let agent_dir = instance.dir.join(zombie_buddy::AGENT_DIR);
+        let paths = zombie_buddy::ensure_agent(&mod_dir, &agent_dir, &instance.game_dir)?;
+        // The agent's config_dir argument keeps its state (mod
+        // approvals, known-authors cache) in the instance's agent dir
+        // instead of the user profile, so approvals are per instance.
+        let config_dir = host_path(&agent_dir)?;
+        let option = if let Some(library) = &paths.library {
+            // Windows: the native loader proxies instrument.dll and
+            // loads the agent jar from the game's working directory.
+            // The loader itself is per-instance (absolute path).
+            if paths.jar.is_some() {
+                let path = host_path(library)?;
+                Some(format!("-agentpath:{path}=config_dir={config_dir}"))
+            } else {
+                None
+            }
+        } else if let Some(jar) = &paths.jar {
+            // Native Linux: no loader needed, the jar is the agent.
+            let path = host_path(jar)?;
+            Some(format!("-javaagent:{path}=config_dir={config_dir}"))
+        } else {
+            None
+        };
+        match option {
+            Some(option) => insert_jvm_option(&mut args, option),
+            None => warn!(
+                "zombie buddy is installed but ships no agent files; launching without it — \
+                 the mod will report itself as not installed"
+            ),
+        }
+    }
+
     Ok(LaunchPlan { program, args, cwd })
+}
+
+/// Insert a JVM option before the main class: everything after the
+/// main class is a game argument, and the agent flag is only read by
+/// the JVM.
+fn insert_jvm_option(args: &mut Vec<String>, option: String) {
+    let index = args
+        .iter()
+        .position(|arg| arg == CLIENT_MAIN_CLASS || arg == SERVER_MAIN_CLASS);
+    match index {
+        Some(index) => args.insert(index, option),
+        None => args.push(option),
+    }
 }
 
 /// Run the game attached to this console and block until it exits.
@@ -169,7 +232,7 @@ fn client_args(sep: &str, cachedir: &str, nosteam: bool) -> Vec<String> {
         format!("-Djava.library.path=./win64/{sep}./"),
         "-cp".to_owned(),
         format!(".{sep}projectzomboid.jar"),
-        "zombie.gameStates.MainScreenState".to_owned(),
+        CLIENT_MAIN_CLASS.to_owned(),
         format!("-cachedir={cachedir}"),
         // The profile's mods/ folder is the only mod source: the store-
         // driven model, immune to workshop shadowing (the default
@@ -205,11 +268,11 @@ fn server_args(sep: &str, cachedir: &str, server_name: &str) -> Vec<String> {
         "-XX:+UseZGC".to_owned(),
         "-XX:-CreateCoredumpOnCrash".to_owned(),
         "-XX:-OmitStackTraceInFastThrow".to_owned(),
-        "-Xmx3072m".to_owned(),
+        "-Xmx16g".to_owned(),
         format!("-Djava.library.path=./natives/{sep}./natives/win64/{sep}./"),
         "-cp".to_owned(),
         format!(".{sep}projectzomboid.jar"),
-        "zombie.network.GameServer".to_owned(),
+        SERVER_MAIN_CLASS.to_owned(),
         format!("-cachedir={cachedir}"),
         // Store-driven like the client: only the profile's mods/.
         "-modfolders".to_owned(),
@@ -317,6 +380,8 @@ mod tests {
             "server must be Steam-enabled"
         );
         assert!(text.contains("-XX:+UseZGC"));
+        // Dedicated 16 GiB heap for the server.
+        assert!(text.contains("-Xmx16g"));
         assert!(text.contains("-Djava.library.path=./natives/;./natives/win64/;./"));
         assert!(text.contains("-cachedir=C:\\p"));
         // Store-driven like the client: only the profile's mods/.
@@ -419,6 +484,85 @@ mod tests {
         // Explicit flag always applies, even with an admin present.
         let launched = plan(&instance, &opts(Some("secret".to_owned()))).unwrap();
         assert_eq!(password_of(&launched), "secret");
+
+        std::fs::remove_dir_all(&base).unwrap();
+    }
+
+    #[test]
+    fn zombie_buddy_gets_its_agent_flag_when_installed() {
+        let base = std::env::temp_dir().join(format!("snapoid-zb-flag-{}", std::process::id()));
+        let game = base.join("game");
+        std::fs::create_dir_all(game.join("jre64/bin")).unwrap();
+        std::fs::write(game.join("jre64/bin/java.exe"), "jvm").unwrap();
+        let profile = base.join("profile");
+        let instance = GameInstance {
+            name: "t".to_owned(),
+            version: "42.22.2".to_owned(),
+            revision: None,
+            dir: base.join("inst"),
+            game_dir: game.clone(),
+            profile_dir: profile.clone(),
+            created: 0,
+        };
+        let options = LaunchOptions {
+            server: false,
+            nosteam: true,
+            admin_password: None,
+        };
+
+        // Without the mod: no agent flag.
+        let launched = plan(&instance, &options).unwrap();
+        assert!(
+            !launched
+                .args
+                .iter()
+                .any(|a| a.starts_with("-agentpath:") || a.starts_with("-agentlib:")),
+            "no agent flag without the mod"
+        );
+
+        // With the mod installed (loader + jar in libs/): the loader is
+        // loaded by absolute path from the instance's own agent/ dir,
+        // the flag is a JVM option (before the main class), and the
+        // game folder gets the jar copy the Windows loader resolves.
+        let mod_dir = profile.join("mods/ZombieBuddy/libs");
+        std::fs::create_dir_all(&mod_dir).unwrap();
+        std::fs::write(mod_dir.join("zbNative.dll"), "loader").unwrap();
+        std::fs::write(mod_dir.join("ZombieBuddy.jar"), "agent jar").unwrap();
+        let launched = plan(&instance, &options).unwrap();
+        let main_class = launched
+            .args
+            .iter()
+            .position(|a| a == CLIENT_MAIN_CLASS)
+            .expect("the client main class is present");
+        let agent_index = launched
+            .args
+            .iter()
+            .position(|a| a.starts_with("-agentpath:"))
+            .expect("the agent flag is passed");
+        assert!(
+            agent_index < main_class,
+            "the agent flag must be a JVM option, not a game argument"
+        );
+        let agent_flag = &launched.args[agent_index];
+        assert!(agent_flag.contains("zbNative.dll"));
+        // The agent's config (approvals, author cache) is per instance.
+        assert!(
+            agent_flag.contains("=config_dir="),
+            "the agent config dir is per instance: {agent_flag}"
+        );
+        // The path form follows the host (Windows form under WSL), so
+        // only the agent dir and file names are asserted here.
+        assert!(
+            agent_flag.to_lowercase().contains("agent"),
+            "the loader is loaded from the instance's agent dir: {agent_flag}"
+        );
+        assert!(instance.dir.join("agent/zbNative.dll").is_file());
+        assert!(instance.dir.join("agent/ZombieBuddy.jar").is_file());
+        assert!(game.join("ZombieBuddy.jar").is_file());
+        assert!(
+            !game.join("zbNative.dll").exists(),
+            "the loader must stay out of the shared game folder"
+        );
 
         std::fs::remove_dir_all(&base).unwrap();
     }
