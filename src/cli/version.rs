@@ -2,13 +2,13 @@ use std::path::PathBuf;
 
 use clap::Subcommand;
 
-use snapoid::auth;
-use snapoid::download::{self, DownloadRequest};
-use snapoid::pz::{self, probe};
-use snapoid::registry;
-use snapoid::steam;
-use snapoid::steamcmd;
-use snapoid::store::{self, Store};
+use crate::auth;
+use crate::download::{self, DownloadRequest};
+use crate::pz::{self, probe};
+use crate::registry;
+use crate::steam;
+use crate::steamcmd;
+use crate::store::{self, Store};
 
 use super::open_store;
 use crate::report;
@@ -35,7 +35,7 @@ pub enum VersionCommand {
         /// Version to download (see `version available`), or "latest"
         version: String,
         /// Steam account name for steamcmd (default: the account
-        /// remembered by `snapoid auth login`)
+        /// remembered by `yapzm auth login`)
         #[arg(short, long)]
         login: Option<String>,
         /// Depot ID override (default: the registry entry's depot, else
@@ -46,6 +46,19 @@ pub enum VersionCommand {
         #[arg(long)]
         force: bool,
     },
+    /// Re-download a stored version to repair missing or corrupted files
+    Repair {
+        /// Stored version to repair (see `version list`)
+        version: String,
+        /// Steam account name for steamcmd (default: the account
+        /// remembered by `yapzm auth login`)
+        #[arg(short, long)]
+        login: Option<String>,
+        /// Depot ID override (default: the registry entry's depot, else
+        /// the Windows depot 108604)
+        #[arg(long)]
+        depot: Option<u64>,
+    },
 }
 
 pub fn run(command: VersionCommand) -> anyhow::Result<()> {
@@ -55,7 +68,7 @@ pub fn run(command: VersionCommand) -> anyhow::Result<()> {
             let info = match paths.game_dir.as_deref() {
                 Some(game_dir) => probe::detect_dir(game_dir)?,
                 None => {
-                    snapoid::warn!("no game install found");
+                    crate::warn!("no game install found");
                     probe::GameVersionInfo::default()
                 }
             };
@@ -107,7 +120,7 @@ pub fn run(command: VersionCommand) -> anyhow::Result<()> {
             let root = store::locate_root(paths.as_ref().and_then(|p| p.game_dir.as_deref()))?;
             let store = Store::open(&root)?;
             let cmd = steamcmd::Process::new(program);
-            // Fall back to the account remembered by `snapoid auth login`.
+            // Fall back to the account remembered by `yapzm auth login`.
             let login = login.or_else(|| auth::load(&root));
             let downloaded = download::download(
                 &store,
@@ -121,6 +134,31 @@ pub fn run(command: VersionCommand) -> anyhow::Result<()> {
                 },
             )?;
             report::print_downloaded(&downloaded);
+        }
+        VersionCommand::Repair {
+            version,
+            login,
+            depot,
+        } => {
+            let program = steamcmd::locate()?;
+            let paths = steam::locate().ok();
+            let root = store::locate_root(paths.as_ref().and_then(|p| p.game_dir.as_deref()))?;
+            let store = Store::open(&root)?;
+            let cmd = steamcmd::Process::new(program);
+            // Fall back to the account remembered by `yapzm auth login`.
+            let login = login.or_else(|| auth::load(&root));
+            let repaired = download::repair(
+                &store,
+                &cmd,
+                &DownloadRequest {
+                    version,
+                    login,
+                    depot,
+                    force: true,
+                    live_game_dir: paths.and_then(|p| p.game_dir),
+                },
+            )?;
+            report::print_downloaded(&repaired);
         }
     }
     Ok(())

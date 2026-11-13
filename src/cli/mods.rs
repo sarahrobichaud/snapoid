@@ -3,13 +3,13 @@ use std::path::Path;
 
 use clap::{ArgGroup, Subcommand};
 
-use snapoid::auth;
-use snapoid::remote;
-use snapoid::scanner::workshop;
-use snapoid::steam;
-use snapoid::steamcmd;
-use snapoid::store::{self, Source, Store};
-use snapoid::workshop as workshop_dl;
+use crate::auth;
+use crate::remote;
+use crate::scanner::workshop;
+use crate::steam;
+use crate::steamcmd;
+use crate::store::{self, Source, Store};
+use crate::workshop as workshop_dl;
 
 use crate::report;
 use crate::ui;
@@ -22,7 +22,7 @@ pub enum ModsCommand {
         /// The local Steam workshop content
         #[arg(long)]
         workshop: bool,
-        /// The local snapoid store
+        /// The local yapzm store
         #[arg(long)]
         store: bool,
     },
@@ -80,7 +80,7 @@ fn list() -> anyhow::Result<()> {
         println!("No workshop items installed for Project Zomboid.");
         return Ok(());
     }
-    snapoid::info!("found {} workshop item(s)", items.len());
+    crate::info!("found {} workshop item(s)", items.len());
     report::print_scan(&items);
     Ok(())
 }
@@ -91,10 +91,10 @@ fn list_store() -> anyhow::Result<()> {
     let store = super::open_store()?;
     let items = store.list_mods()?;
     if items.is_empty() {
-        println!("No mods stored; update some with `snapoid mods update --workshop`.");
+        println!("No mods stored; update some with `yapzm mods update --workshop`.");
         return Ok(());
     }
-    snapoid::info!("{} workshop item(s) stored", items.len());
+    crate::info!("{} workshop item(s) stored", items.len());
     report::print_stored_mods(&items);
     Ok(())
 }
@@ -109,7 +109,7 @@ fn repair_meta() -> anyhow::Result<()> {
         println!("No mods stored; nothing to repair.");
         return Ok(());
     }
-    snapoid::info!("rebuilt {} mod manifest(s)", repaired.len());
+    crate::info!("rebuilt {} mod manifest(s)", repaired.len());
     report::print_stored_mods(&repaired);
     Ok(())
 }
@@ -138,7 +138,7 @@ fn update(copy: bool) -> anyhow::Result<()> {
                 && item.time_updated > 0
                 && stored.time_updated >= item.time_updated
             {
-                snapoid::info!("mod {} already stored; skipping", item.id);
+                crate::info!("mod {} already stored; skipping", item.id);
                 skipped += 1;
                 continue;
             }
@@ -164,7 +164,7 @@ fn update(copy: bool) -> anyhow::Result<()> {
         let remote = match remote::web::fetch_remote(&ids) {
             Ok(items) => items,
             Err(error) => {
-                snapoid::warn!("could not query the workshop ({error:#}); downloading everything");
+                crate::warn!("could not query the workshop ({error:#}); downloading everything");
                 Vec::new()
             }
         };
@@ -201,7 +201,7 @@ fn update(copy: bool) -> anyhow::Result<()> {
         let program = steamcmd::locate()?;
         let cmd = steamcmd::Process::new(program);
         // Workshop items download anonymously by default; the account
-        // remembered by `snapoid auth login` is used when present, since
+        // remembered by `yapzm auth login` is used when present, since
         // some items need a subscription.
         let login = auth::load(&root).unwrap_or_else(|| "anonymous".to_owned());
         let content = workshop_dl::download_items(&cmd, &login, &stale)?;
@@ -214,7 +214,7 @@ fn update(copy: bool) -> anyhow::Result<()> {
         for id in &stale {
             let from = content.join(id.to_string());
             if !dir_has_files(&from) {
-                snapoid::warn!("steamcmd did not download item {}; skipping", id);
+                crate::warn!("steamcmd did not download item {}; skipping", id);
                 continue;
             }
             let stored = store.adopt_mod_dir(

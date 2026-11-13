@@ -1,12 +1,12 @@
 #!/bin/sh
-# Build a distributable Windows zip of snapoid from WSL.
+# Build a distributable Windows zip of yapzm from WSL.
 #
 # Usage:
 #   scripts/package-windows.sh              # version taken from Cargo.toml
 #   scripts/package-windows.sh v0.1.0-proto # override the version in the name
 #
 # Steps:
-#   1. mirror the project to C:\src\snapoid and build it there with the
+#   1. mirror the project to C:\src\yapzm and build it there with the
 #      native Windows toolchain (scripts/deploy-windows.sh --build)
 #   2. zip the exe as yapzm-<version>-x86_64-windows.zip
 #   3. copy the zip and the bare exe (same name, .exe suffix) back into
@@ -18,8 +18,8 @@
 set -eu
 
 PROJECT_DIR=$(cd "$(dirname "$0")/.." && pwd)
-WIN_PROJECT='C:/src/snapoid'
-WIN_TARGET='C:/Users/zyriel/snapoid-target'
+WIN_PROJECT='C:/src/yapzm'
+WIN_TARGET='C:/Users/zyriel/yapzm-target'
 PS=/mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe
 
 VERSION=${1:-}
@@ -40,8 +40,8 @@ echo "==> packaging $ZIP_NAME"
 
 DIST="$PROJECT_DIR/dist"
 mkdir -p "$DIST"
-cp "/mnt/c/src/snapoid/dist/$ZIP_NAME" "$DIST/"
-cp "/mnt/c/Users/zyriel/snapoid-target/release/yapzm.exe" "$DIST/yapzm-$VERSION-x86_64-windows.exe"
+cp "/mnt/c/src/yapzm/dist/$ZIP_NAME" "$DIST/"
+cp "/mnt/c/Users/zyriel/yapzm-target/release/yapzm.exe" "$DIST/yapzm-$VERSION-x86_64-windows.exe"
 
 echo "==> done"
 echo "    artifact: dist/$ZIP_NAME"

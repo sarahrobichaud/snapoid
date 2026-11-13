@@ -12,7 +12,7 @@ pub mod zombie_buddy;
 /// Project Zomboid's Steam app ID.
 pub const APP_ID: u32 = 108600;
 
-/// The Windows depot holding the game files snapoid snapshots; the
+/// The Windows depot holding the game files yapzm snapshots; the
 /// default for `download_depot` when neither the CLI nor the registry
 /// entry specifies one.
 pub const WINDOWS_DEPOT: u64 = 108604;

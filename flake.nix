@@ -1,5 +1,5 @@
 {
-  description = "Dev environment for snapoid";
+  description = "Dev environment for yapzm";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";

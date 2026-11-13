@@ -1,6 +1,6 @@
 use clap::Subcommand;
 
-use snapoid::store::Store;
+use crate::store::Store;
 
 use super::instance_mods;
 use super::open_store;
@@ -28,7 +28,7 @@ pub enum InstanceCommand {
         #[arg(long)]
         nosteam: bool,
         /// Server admin password; on the server's first launch it
-        /// defaults to 'snapoid', passing this changes it
+        /// defaults to 'yapzm', passing this changes it
         #[arg(long)]
         admin_password: Option<String>,
         /// Pass `-debug` (enables the game's debug log channels, e.g. the
@@ -56,8 +56,8 @@ pub fn run(name: Option<String>, command: Option<InstanceCommand>) -> anyhow::Re
                     if games.is_empty() {
                         anyhow::bail!(
                             "no game versions stored; download one with \
-                             `snapoid version download` or capture the install with \
-                             `snapoid version snapshot`"
+                             `yapzm version download` or capture the install with \
+                             `yapzm version snapshot`"
                         );
                     }
                     let items: Vec<String> = games
@@ -91,15 +91,15 @@ pub fn run(name: Option<String>, command: Option<InstanceCommand>) -> anyhow::Re
             let store = open_store()?;
             let name = resolve_name(&store, name)?;
             let instance = store.instance(&name)?;
-            let options = snapoid::launch::LaunchOptions {
+            let options = crate::launch::LaunchOptions {
                 server,
                 nosteam,
                 admin_password,
                 debug,
             };
-            let plan = snapoid::launch::plan(&instance, &options)?;
+            let plan = crate::launch::plan(&instance, &options)?;
             report::print_launched(&instance);
-            let status = snapoid::launch::run(&plan)?;
+            let status = crate::launch::run(&plan)?;
             report::print_exited(&instance, &status);
         }
         Some(InstanceCommand::Reset) => {
@@ -117,8 +117,8 @@ pub fn run(name: Option<String>, command: Option<InstanceCommand>) -> anyhow::Re
                 report::print_instances(std::slice::from_ref(&instance));
             }
             None => anyhow::bail!(
-                "nothing to do; try `snapoid instance list`, \
-                 `snapoid instance new <name>`, or `snapoid instance <name> launch`"
+                "nothing to do; try `yapzm instance list`, \
+                 `yapzm instance new <name>`, or `yapzm instance <name> launch`"
             ),
         },
     }
@@ -138,7 +138,7 @@ pub(crate) fn resolve_name(store: &Store, name: Option<String>) -> anyhow::Resul
 fn pick_instance(store: &Store) -> anyhow::Result<String> {
     let instances = store.list_instances()?;
     if instances.is_empty() {
-        anyhow::bail!("no game instances stored; create one with `snapoid instance new`");
+        anyhow::bail!("no game instances stored; create one with `yapzm instance new`");
     }
     let items: Vec<String> = instances
         .iter()

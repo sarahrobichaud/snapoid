@@ -1,9 +1,9 @@
 use clap::Subcommand;
 
-use snapoid::auth;
-use snapoid::steam;
-use snapoid::steamcmd::{self, SteamCmd as _};
-use snapoid::store;
+use crate::auth;
+use crate::steam;
+use crate::steamcmd::{self, SteamCmd as _};
+use crate::store;
 
 /// Auth subcommand names, used to catch `auth login status`-style
 /// mix-ups where a subcommand is typed as an account name.
@@ -54,7 +54,7 @@ fn login(username: Option<String>) -> anyhow::Result<()> {
             Some(name) => name,
             None => anyhow::bail!(
                 "no account given and none remembered; pass the account \
-                 name, e.g. `snapoid auth login <username>`"
+                 name, e.g. `yapzm auth login <username>`"
             ),
         },
     };
@@ -72,7 +72,7 @@ fn login(username: Option<String>) -> anyhow::Result<()> {
     {
         auth::save(&root, name)?;
         println!("steamcmd login for {name} verified (cached credentials work)");
-        println!("  `snapoid version download` no longer needs --login");
+        println!("  `yapzm version download` no longer needs --login");
         return Ok(());
     }
 
@@ -83,16 +83,16 @@ fn login(username: Option<String>) -> anyhow::Result<()> {
         anyhow::bail!(
             "'{name}' looks like an auth subcommand, not a Steam account \
              name; to check the remembered account, run \
-             `snapoid auth status` — if the account really is named \
-             '{name}', run `snapoid auth login -- {name}`"
+             `yapzm auth status` — if the account really is named \
+             '{name}', run `yapzm auth login -- {name}`"
         );
     }
 
-    snapoid::info!("logging in to steamcmd as {name} (steamcmd prompts for the password)");
+    crate::info!("logging in to steamcmd as {name} (steamcmd prompts for the password)");
     if let Err(error) = cmd.run(&login_args(name)) {
         anyhow::bail!(
             "steamcmd login for {name} failed: {error}; check the account \
-             name and password, or run `snapoid auth status` to inspect \
+             name and password, or run `yapzm auth status` to inspect \
              the remembered account without logging in"
         );
     }
@@ -107,7 +107,7 @@ fn login(username: Option<String>) -> anyhow::Result<()> {
     }
     auth::save(&root, name)?;
     println!("steamcmd login for {name} verified and remembered");
-    println!("  `snapoid version download` no longer needs --login");
+    println!("  `yapzm version download` no longer needs --login");
     Ok(())
 }
 
@@ -146,13 +146,13 @@ fn logout(clear_credentials: bool) -> anyhow::Result<()> {
         Some(name) => {
             let output = cmd.capture(&login_args(name))?;
             if steamcmd::login_ok(&output) {
-                snapoid::debug!("probe output: {output}");
+                crate::debug!("probe output: {output}");
                 if clear_credentials {
-                    snapoid::warn!("steamcmd still accepts cached credentials for {name}");
+                    crate::warn!("steamcmd still accepts cached credentials for {name}");
                 } else {
-                    snapoid::warn!(
+                    crate::warn!(
                         "steamcmd still accepts cached credentials for {name}; \
-                         run `snapoid auth logout --clear-credentials` to \
+                         run `yapzm auth logout --clear-credentials` to \
                          also drop the Steam Guard machine auth"
                     );
                 }
@@ -195,7 +195,7 @@ fn status() -> anyhow::Result<()> {
     let root = store_root()?;
 
     let Some(name) = auth::load(&root) else {
-        anyhow::bail!("no account remembered; run `snapoid auth login <username>`");
+        anyhow::bail!("no account remembered; run `yapzm auth login <username>`");
     };
     println!("account:  {name}");
     let ok = cmd
@@ -205,7 +205,7 @@ fn status() -> anyhow::Result<()> {
     if !ok {
         anyhow::bail!(
             "not logged in: steamcmd rejects the saved credentials for \
-             {name}; run `snapoid auth login` to re-authenticate"
+             {name}; run `yapzm auth login` to re-authenticate"
         );
     }
     println!("steamcmd: login OK (cached credentials work)");

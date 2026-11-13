@@ -1,10 +1,6 @@
-//! CLI layer: argument definitions and thin handlers that compose library
-//! entry points.
-
-mod cli;
-mod report;
-mod ui;
+//! The `yapzm` binary: entry point for the yapzm CLI. The executable's
+//! name selects the app data dir (see `yapzm::config::app_dir_name`).
 
 fn main() -> anyhow::Result<()> {
-    cli::run()
+    yapzm::cli::run()
 }

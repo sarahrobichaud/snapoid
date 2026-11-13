@@ -46,10 +46,25 @@ pub fn wsl_drive_root(path: &Path) -> Option<PathBuf> {
     }
 }
 
+/// Automounted WSL drive roots (/mnt/<letter>), sorted by letter.
+pub fn wsl_drives() -> Vec<PathBuf> {
+    let mut drives: Vec<PathBuf> = std::fs::read_dir("/mnt")
+        .map(|entries| {
+            entries
+                .flatten()
+                .filter_map(|entry| wsl_drive_root(&entry.path()))
+                .filter(|drive| drive.is_dir())
+                .collect()
+        })
+        .unwrap_or_default();
+    drives.sort();
+    drives
+}
+
 /// Find a Windows user profile on the given drive: entries of
 /// <drive>/Users, skipping non-profile dirs, that have an
 /// AppData/Roaming folder. Prefers the profile that owns the Zomboid
-/// user dir, since that is the user snapoid is managing; otherwise the
+/// user dir, since that is the user yapzm is managing; otherwise the
 /// first (sorted) candidate.
 pub fn windows_profile_on(drive: &Path) -> Option<PathBuf> {
     let mut candidates: Vec<PathBuf> = std::fs::read_dir(drive.join("Users"))
@@ -166,7 +181,7 @@ mod tests {
 
     #[test]
     fn finds_windows_profile_on_drive() -> anyhow::Result<()> {
-        let base = std::env::temp_dir().join(format!("snapoid-prof-{}", std::process::id()));
+        let base = std::env::temp_dir().join(format!("yapzm-prof-{}", std::process::id()));
         let users = base.join("Users");
         std::fs::create_dir_all(users.join("Public"))?;
         std::fs::create_dir_all(users.join("Alpha/AppData/Roaming"))?;

@@ -1,6 +1,6 @@
-use snapoid::pz;
-use snapoid::steam;
-use snapoid::steamcmd;
+use crate::pz;
+use crate::steam;
+use crate::steamcmd;
 
 use crate::report;
 

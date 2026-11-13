@@ -56,7 +56,7 @@ impl Store {
                 }
                 .into());
             }
-            // No metadata: a leftover from a failed creation. snapoid owns
+            // No metadata: a leftover from a failed creation. yapzm owns
             // this folder, so clear it and start fresh.
             warn!("removing leftover instance dir {}", dir.display());
             fs::remove_dir_all(&dir).with_context(|| format!("clearing {}", dir.display()))?;
@@ -174,7 +174,7 @@ mod tests {
 
     #[test]
     fn creates_instance_linked_to_version() -> Result<()> {
-        let base = std::env::temp_dir().join(format!("snapoid-inst-{}", std::process::id()));
+        let base = std::env::temp_dir().join(format!("yapzm-inst-{}", std::process::id()));
         let store = Store::open_at(&base)?;
 
         let game = store.game_dir("42.22.2");

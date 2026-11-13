@@ -3,16 +3,16 @@
 
 use std::cmp::Ordering;
 
-use snapoid::download::Downloaded;
-use snapoid::fmt;
-use snapoid::pz::compat;
-use snapoid::pz::item::Layout;
-use snapoid::pz::probe::GameVersionInfo;
-use snapoid::pz::version;
-use snapoid::registry::Registry;
-use snapoid::scanner::workshop::{ModEntry, WorkshopItem};
-use snapoid::steam::SteamPaths;
-use snapoid::store::{
+use crate::download::Downloaded;
+use crate::fmt;
+use crate::pz::compat;
+use crate::pz::item::Layout;
+use crate::pz::probe::GameVersionInfo;
+use crate::pz::version;
+use crate::registry::Registry;
+use crate::scanner::workshop::{ModEntry, WorkshopItem};
+use crate::steam::SteamPaths;
+use crate::store::{
     GameInstance, InstallOutcome, PackedModpack, Source, StoredGame, StoredMod,
 };
 
@@ -574,7 +574,7 @@ fn profile_state(instance: &GameInstance) -> &'static str {
 }
 
 /// Render a launched instance: one line, since the game output is
-/// suppressed and snapoid now blocks until the game exits.
+/// suppressed and yapzm now blocks until the game exits.
 pub fn print_launched(instance: &GameInstance) {
     println!(
         "instance {} launched — Ctrl+C or closing the terminal stops the game",

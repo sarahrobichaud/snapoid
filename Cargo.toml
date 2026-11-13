@@ -1,13 +1,22 @@
 [package]
-name = "snapoid"
+name = "yapzm"
 version = "0.1.0"
 edition = "2024"
+default-run = "yapzm"
 
-# Binary ships under the yapzm name; the package keeps the repo name until
-# the repo itself is renamed.
+# The -dev/-test targets are identical builds whose executable name
+# selects the yapzm-dev / yapzm-test stores.
 [[bin]]
 name = "yapzm"
 path = "src/main.rs"
+
+[[bin]]
+name = "yapzm-dev"
+path = "src/bin/yapzm-dev.rs"
+
+[[bin]]
+name = "yapzm-test"
+path = "src/bin/yapzm-test.rs"
 
 [dependencies]
 anyhow = "1"

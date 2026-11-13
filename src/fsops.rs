@@ -198,7 +198,7 @@ mod tests {
 
     #[test]
     fn copies_tree_excluding_top_level_entries() -> Result<()> {
-        let base = std::env::temp_dir().join(format!("snapoid-test-{}", std::process::id()));
+        let base = std::env::temp_dir().join(format!("yapzm-test-{}", std::process::id()));
         let src = base.join("game");
         let dst = base.join("out");
         for rel in ["media/lua", "mods/standalone", "Zomboid/saves", "jre64/bin"] {

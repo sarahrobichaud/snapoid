@@ -1,5 +1,5 @@
 //! Terminal UI: interactive picker and the progress-bar adapter for
-//! [`snapoid::fsops::Progress`]. Built on the `dialoguer` and `indicatif`
+//! [`crate::fsops::Progress`]. Built on the `dialoguer` and `indicatif`
 //! crates.
 
 use std::io::IsTerminal;
@@ -8,7 +8,7 @@ use anyhow::Result;
 use dialoguer::{MultiSelect, Select};
 use indicatif::{ProgressBar, ProgressStyle};
 
-use snapoid::fsops;
+use crate::fsops;
 
 /// Print `items` as an interactive menu and read a choice from the
 /// terminal.
@@ -97,7 +97,7 @@ pub fn progress_factory(total_bytes: u64) -> Box<dyn fsops::Progress> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use snapoid::fsops::Progress as _;
+    use crate::fsops::Progress as _;
 
     #[test]
     fn hidden_progress_is_silent() {

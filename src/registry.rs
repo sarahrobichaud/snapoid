@@ -284,7 +284,7 @@ mod tests {
         };
 
         let path =
-            std::env::temp_dir().join(format!("snapoid-registry-{}.json", std::process::id()));
+            std::env::temp_dir().join(format!("yapzm-registry-{}.json", std::process::id()));
         save_file(&path, &registry)?;
         let loaded = load_file(&path)?;
         assert_eq!(loaded, registry);

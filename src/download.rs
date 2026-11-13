@@ -27,6 +27,7 @@ use crate::{debug, info, warn};
 
 /// The result of a successful download request, pointing at the stored
 /// version.
+#[derive(Debug)]
 pub struct Downloaded {
     pub version: String,
     pub revision: Option<String>,
@@ -57,7 +58,7 @@ pub struct DownloadRequest {
 pub enum Error {
     #[error(
         "game downloads need a Steam account that owns Project Zomboid; \
-         run `snapoid auth login <username>` once, or pass --login \
+         run `yapzm auth login <username>` once, or pass --login \
          <username> (steamcmd prompts for the password, or reuses its \
          cached credentials)"
     )]
@@ -81,6 +82,62 @@ pub fn download(
     } else {
         download_pinned(store, cmd, request)
     }
+}
+
+/// Re-download an already-stored version to repair missing or corrupted
+/// files.
+///
+/// Only registry-pinned versions can be repaired: the depot manifest is
+/// what makes an exact re-download possible. The stored dir is replaced
+/// atomically (`adopt_game_dir`), so instances linked to the version keep
+/// pointing at the same path, but anything running off it should be
+/// stopped first.
+pub fn repair(
+    store: &Store,
+    cmd: &dyn SteamCmd,
+    request: &DownloadRequest,
+) -> Result<Downloaded> {
+    let version = &request.version;
+    if version.eq_ignore_ascii_case("latest") {
+        anyhow::bail!(
+            "repair needs a specific stored version (the latest build \
+             cannot be pinned); see `yapzm version list`"
+        );
+    }
+    let existing = store
+        .list_games()?
+        .into_iter()
+        .find(|game| game.version == *version)
+        .with_context(|| format!(
+            "version {version} is not stored; nothing to repair — \
+             download it with `yapzm version download {version}`"
+        ))?;
+    let reg = registry::load()?;
+    if !reg.entries.iter().any(|entry| entry.version == *version) {
+        anyhow::bail!(
+            "version {version} has no registry entry, so it cannot be \
+             re-downloaded exactly; versions captured from a live install \
+             can only be restored with `yapzm version snapshot`"
+        );
+    }
+    info!(
+        "repairing stored version {version} in {} (stop any game or \
+         server using it first)",
+        existing.dir.display()
+    );
+    // Repair always re-downloads: the stored copy is the thing that is
+    // broken, so the "already stored" skip must not trigger.
+    download(
+        store,
+        cmd,
+        &DownloadRequest {
+            version: version.clone(),
+            login: request.login.clone(),
+            depot: request.depot,
+            force: true,
+            live_game_dir: request.live_game_dir.clone(),
+        },
+    )
 }
 
 /// Download the current live build via `+app_update` into a provisional
@@ -253,7 +310,7 @@ fn download_pinned(
     let login = require_login(request.login.as_deref())?;
 
     let entry = entry.with_context(|| {
-        format!("{version} is not in the registry; see `snapoid version available`")
+        format!("{version} is not in the registry; see `yapzm version available`")
     })?;
     let manifest = entry.manifest;
     let depot = request.depot.or(entry.depot).unwrap_or(pz::WINDOWS_DEPOT);
@@ -431,8 +488,36 @@ mod tests {
 "#;
 
     #[test]
+    fn repair_requires_a_stored_pinned_version() -> Result<()> {
+        let base = std::env::temp_dir().join(format!("yapzm-repair-{}", std::process::id()));
+        let store = Store::open_at(&base)?;
+        let cmd = FakeCmd {
+            app_info: APP_INFO.to_owned(),
+        };
+        let request = |version: &str| DownloadRequest {
+            version: version.to_owned(),
+            login: Some("user".to_owned()),
+            depot: None,
+            force: false,
+            live_game_dir: None,
+        };
+
+        // "latest" cannot be repaired: there is no pinned manifest to
+        // re-download exactly.
+        let error = repair(&store, &cmd, &request("latest")).unwrap_err();
+        assert!(error.to_string().contains("specific stored version"), "{error:#}");
+
+        // An unknown version has nothing to repair.
+        let error = repair(&store, &cmd, &request("9.9.9")).unwrap_err();
+        assert!(error.to_string().contains("not stored"), "{error:#}");
+
+        fs::remove_dir_all(&base)?;
+        Ok(())
+    }
+
+    #[test]
     fn skips_latest_when_buildid_already_stored() -> Result<()> {
-        let base = std::env::temp_dir().join(format!("snapoid-dl-{}", std::process::id()));
+        let base = std::env::temp_dir().join(format!("yapzm-dl-{}", std::process::id()));
         let store = Store::open_at(&base)?;
 
         let incoming = base.join("incoming");

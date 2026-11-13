@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use clap::Subcommand;
 
-use snapoid::steamcmd::{self, SteamCmd as _, install};
+use crate::steamcmd::{self, SteamCmd as _, install};
 
 #[derive(Subcommand)]
 pub enum SteamcmdCommand {
@@ -28,10 +28,10 @@ pub fn run(command: Option<SteamcmdCommand>, args: Vec<String>) -> anyhow::Resul
                 // discovered automatically; a custom one needs the env
                 // override.
                 if steamcmd::locate().map(|found| found != exe).unwrap_or(true) {
-                    println!("  snapoid will not find this copy on its own;");
-                    println!("  set SNAPOID_STEAMCMD to {}", exe.display());
+                    println!("  yapzm will not find this copy on its own;");
+                    println!("  set YAPZM_STEAMCMD to {}", exe.display());
                 }
-                println!("  log in once with: snapoid auth login <username>");
+                println!("  log in once with: yapzm auth login <username>");
                 Ok(())
             }
         };

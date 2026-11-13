@@ -11,11 +11,11 @@ mod version;
 
 use clap::{Parser, Subcommand};
 
-use snapoid::logger;
+use crate::logger;
 
 #[derive(Parser)]
 #[command(
-    name = "snapoid",
+    name = "yapzm",
     version,
     about = "Version manager for Project Zomboid workshop mods",
     long_about = None,
@@ -81,8 +81,8 @@ pub fn run() -> anyhow::Result<()> {
 
 /// Open the store, tolerating a missing Steam install (the store location
 /// depends on the game drive under WSL, but listing should still work).
-pub(crate) fn open_store() -> anyhow::Result<snapoid::store::Store> {
-    let game_dir = snapoid::steam::locate().ok().and_then(|p| p.game_dir);
-    let root = snapoid::store::locate_root(game_dir.as_deref())?;
-    snapoid::store::Store::open(&root)
+pub(crate) fn open_store() -> anyhow::Result<crate::store::Store> {
+    let game_dir = crate::steam::locate().ok().and_then(|p| p.game_dir);
+    let root = crate::store::locate_root(game_dir.as_deref())?;
+    crate::store::Store::open(&root)
 }

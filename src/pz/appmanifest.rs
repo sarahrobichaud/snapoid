@@ -27,7 +27,7 @@ mod tests {
 
     #[test]
     fn reads_buildid_from_appmanifest() -> anyhow::Result<()> {
-        let base = std::env::temp_dir().join(format!("snapoid-manifest-{}", std::process::id()));
+        let base = std::env::temp_dir().join(format!("yapzm-manifest-{}", std::process::id()));
         let steamapps = base.join("steamapps");
         std::fs::create_dir_all(&steamapps)?;
         std::fs::write(

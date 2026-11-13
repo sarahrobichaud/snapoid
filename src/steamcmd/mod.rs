@@ -68,7 +68,7 @@ impl SteamCmd for Process {
 
 /// Locate the steamcmd executable.
 ///
-/// Checked in order: the `SNAPOID_STEAMCMD` environment variable (explicit
+/// Checked in order: the `YAPZM_STEAMCMD` environment variable (explicit
 /// override), the Steam install directory (steamcmd is sometimes installed
 /// there), every directory on `PATH`, then the usual manual-install
 /// locations. Under WSL only the Windows `steamcmd.exe` is considered;
@@ -79,7 +79,7 @@ pub fn locate() -> Result<PathBuf> {
             return Ok(platform::normalize_path(path));
         }
         anyhow::bail!(
-            "SNAPOID_STEAMCMD points to {}, which is not a file",
+            "YAPZM_STEAMCMD points to {}, which is not a file",
             path.display()
         );
     }
@@ -148,9 +148,9 @@ pub fn locate() -> Result<PathBuf> {
         .with_context(|| {
             if wsl {
                 "no Windows steamcmd.exe found; install steamcmd on the \
-                 Windows host (e.g. C:\\steamcmd) or set SNAPOID_STEAMCMD"
+                 Windows host (e.g. C:\\steamcmd) or set YAPZM_STEAMCMD"
             } else {
-                "steamcmd executable not found; install it or set SNAPOID_STEAMCMD"
+                "steamcmd executable not found; install it or set YAPZM_STEAMCMD"
             }
         })
 }

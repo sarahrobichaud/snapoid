@@ -7,4 +7,4 @@
 # - CARGO_TARGET_DIR: keep Windows artifacts on the native Windows
 #   filesystem (faster than 9p, and avoids clobbering Linux artifacts in
 #   the shared target/ directory).
-exec powershell.exe -NoProfile -Command "Set-Item Env:CARGO_INCREMENTAL -Value '0'; Set-Item Env:CARGO_TARGET_DIR -Value 'C:\Users\zyriel\snapoid-target'; cargo check"
+exec powershell.exe -NoProfile -Command "Set-Item Env:CARGO_INCREMENTAL -Value '0'; Set-Item Env:CARGO_TARGET_DIR -Value 'C:\Users\zyriel\yapzm-target'; cargo check"

@@ -278,7 +278,7 @@ mod tests {
 
     #[test]
     fn saves_and_replaces_copy() -> Result<()> {
-        let base = std::env::temp_dir().join(format!("snapoid-modsave-{}", std::process::id()));
+        let base = std::env::temp_dir().join(format!("yapzm-modsave-{}", std::process::id()));
         let store = Store::open_at(&base)?;
 
         let from = base.join("workshop/123");
@@ -337,7 +337,7 @@ mod tests {
 
     #[test]
     fn lists_stored_mods() -> Result<()> {
-        let base = std::env::temp_dir().join(format!("snapoid-modlist-{}", std::process::id()));
+        let base = std::env::temp_dir().join(format!("yapzm-modlist-{}", std::process::id()));
         let store = Store::open_at(&base)?;
         assert!(store.list_mods()?.is_empty());
 
@@ -384,7 +384,7 @@ mod tests {
 
     #[test]
     fn adopts_downloaded_dir() -> Result<()> {
-        let base = std::env::temp_dir().join(format!("snapoid-modadopt-{}", std::process::id()));
+        let base = std::env::temp_dir().join(format!("yapzm-modadopt-{}", std::process::id()));
         let store = Store::open_at(&base)?;
 
         let from = base.join("steamcmd-cache/123");
@@ -426,7 +426,7 @@ mod tests {
     /// A sidecar written before the enriched metadata still lists.
     #[test]
     fn lists_old_sidecar_without_new_fields() -> Result<()> {
-        let base = std::env::temp_dir().join(format!("snapoid-modold-{}", std::process::id()));
+        let base = std::env::temp_dir().join(format!("yapzm-modold-{}", std::process::id()));
         let store = Store::open_at(&base)?;
         fs::create_dir_all(store.mod_dir(77))?;
         fs::write(
@@ -449,7 +449,7 @@ mod tests {
     /// keeping the capture-time fields.
     #[test]
     fn repairs_meta_from_stored_files() -> Result<()> {
-        let base = std::env::temp_dir().join(format!("snapoid-modrepair-{}", std::process::id()));
+        let base = std::env::temp_dir().join(format!("yapzm-modrepair-{}", std::process::id()));
         let store = Store::open_at(&base)?;
 
         let dir = store.mod_dir(88);

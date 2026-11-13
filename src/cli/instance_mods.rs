@@ -2,10 +2,10 @@ use std::path::{Path, PathBuf};
 
 use clap::Subcommand;
 
-use snapoid::fmt;
-use snapoid::pz::compat::{self, Compatibility, Incompatibility};
-use snapoid::pz::item::ModEntry;
-use snapoid::store::{mod_install_status, ModStatus, SelectedMod, StoredMod};
+use crate::fmt;
+use crate::pz::compat::{self, Compatibility, Incompatibility};
+use crate::pz::item::ModEntry;
+use crate::store::{mod_install_status, ModStatus, SelectedMod, StoredMod};
 
 use super::open_store;
 use crate::report;
@@ -79,7 +79,7 @@ fn install(name: Option<String>) -> anyhow::Result<()> {
     let instance = store.instance(&name)?;
     let mods = store.list_mods()?;
     if mods.is_empty() {
-        println!("No mods stored; update some with `snapoid mods update --workshop`.");
+        println!("No mods stored; update some with `yapzm mods update --workshop`.");
         return Ok(());
     }
 

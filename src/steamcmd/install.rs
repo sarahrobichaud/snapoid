@@ -243,7 +243,7 @@ mod tests {
             writer.finish()?;
         }
 
-        let base = std::env::temp_dir().join(format!("snapoid-install-{}", std::process::id()));
+        let base = std::env::temp_dir().join(format!("yapzm-install-{}", std::process::id()));
         std::fs::remove_dir_all(&base).ok();
         extract(&zip_bytes, &base)?;
 
