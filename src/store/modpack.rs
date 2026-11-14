@@ -462,7 +462,7 @@ mod tests {
     /// its loader and agent jar in libs/).
     fn fixture(name: &str) -> Result<(Store, GameInstance, GameInstance, StoredMod, PathBuf)> {
         let base =
-            std::env::temp_dir().join(format!("yapzm-modpack-{name}-{}", std::process::id()));
+            std::env::temp_dir().join(format!("snapoid-modpack-{name}-{}", std::process::id()));
         let store = Store::open_at(&base)?;
 
         let game = store.game_dir("42.22.2");
@@ -602,20 +602,9 @@ mod tests {
             target
                 .profile_dir
                 .join("Server")
-                .join("yapzm_server_target.ini"),
+                .join("snapoid_server_target.ini"),
         )?;
         assert_eq!(ini, "PublicName=target\nMods=ZombieBuddy;PM\n");
-
-        // The reset sentinel is pre-created here too: without it the
-        // game wipes default.txt on the profile's first launch.
-        assert_eq!(
-            fs::read_to_string(
-                target
-                    .profile_dir
-                    .join("mods/reset-mods-42_00.txt")
-            )?,
-            "If this file does not exist, default.txt will be reset to empty (no mods active)."
-        );
 
         // No staging left behind.
         assert!(!target.dir.join(".install-staging").exists());

@@ -110,7 +110,7 @@ mod tests {
     /// metadata with the disk listing and parses mod.info version fields.
     #[test]
     fn scans_fixture_layout() {
-        let base = std::env::temp_dir().join(format!("yapzm-scan-test-{}", std::process::id()));
+        let base = std::env::temp_dir().join(format!("snapoid-scan-test-{}", std::process::id()));
         let content = base.join("steamapps/workshop/content/108600");
 
         let acf = base.join("steamapps/workshop/appworkshop_108600.acf");

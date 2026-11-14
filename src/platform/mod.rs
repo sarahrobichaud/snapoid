@@ -10,11 +10,6 @@ use std::path::{MAIN_SEPARATOR_STR, Path, PathBuf};
 /// Entries of C:\Users that are not user profiles.
 const NON_PROFILE_USERS: &[&str] = &["public", "default", "default user", "all users"];
 
-/// True when compiled for Windows.
-pub fn is_windows() -> bool {
-    cfg!(windows)
-}
-
 /// True when running under WSL (kernel release reports Microsoft/WSL).
 pub fn is_wsl() -> bool {
     std::fs::read_to_string("/proc/sys/kernel/osrelease")
@@ -23,12 +18,6 @@ pub fn is_wsl() -> bool {
             release.contains("microsoft") || release.contains("wsl")
         })
         .unwrap_or(false)
-}
-
-/// True when the Windows host filesystem is the target: native Windows,
-/// or WSL reaching the host through /mnt.
-pub fn is_windows_host() -> bool {
-    is_windows() || is_wsl()
 }
 
 /// For a path under a WSL drive automount (/mnt/<letter>/...), return the
@@ -57,40 +46,10 @@ pub fn wsl_drive_root(path: &Path) -> Option<PathBuf> {
     }
 }
 
-/// The Windows-host form of a path: under WSL, /mnt/<letter>/... becomes
-/// <letter>:\...; other paths are unchanged.
-pub fn windows_host_path(path: &Path) -> PathBuf {
-    let Some(drive_root) = wsl_drive_root(path) else {
-        return path.to_path_buf();
-    };
-    let rest = path.strip_prefix(&drive_root).unwrap_or(path);
-    let letter = drive_root
-        .file_name()
-        .map(|name| name.to_string_lossy().to_ascii_uppercase())
-        .unwrap_or_default();
-    let text = rest.to_string_lossy().replace('/', "\\");
-    PathBuf::from(format!("{letter}:\\{text}"))
-}
-
-/// Automounted WSL drive roots (/mnt/<letter>), sorted by letter.
-pub fn wsl_drives() -> Vec<PathBuf> {
-    let mut drives: Vec<PathBuf> = std::fs::read_dir("/mnt")
-        .map(|entries| {
-            entries
-                .flatten()
-                .filter_map(|entry| wsl_drive_root(&entry.path()))
-                .filter(|drive| drive.is_dir())
-                .collect()
-        })
-        .unwrap_or_default();
-    drives.sort();
-    drives
-}
-
 /// Find a Windows user profile on the given drive: entries of
 /// <drive>/Users, skipping non-profile dirs, that have an
 /// AppData/Roaming folder. Prefers the profile that owns the Zomboid
-/// user dir, since that is the user yapzm is managing; otherwise the
+/// user dir, since that is the user snapoid is managing; otherwise the
 /// first (sorted) candidate.
 pub fn windows_profile_on(drive: &Path) -> Option<PathBuf> {
     let mut candidates: Vec<PathBuf> = std::fs::read_dir(drive.join("Users"))
@@ -206,22 +165,8 @@ mod tests {
     }
 
     #[test]
-    fn maps_wsl_automount_paths_to_windows_host_form() {
-        assert_eq!(
-            windows_host_path(Path::new("/mnt/c/Program Files (x86)/Steam")),
-            PathBuf::from(r"C:\Program Files (x86)\Steam")
-        );
-        assert_eq!(windows_host_path(Path::new("/mnt/c")), PathBuf::from(r"C:\"));
-        // Non-automount paths are unchanged.
-        assert_eq!(
-            windows_host_path(Path::new("/home/user/game")),
-            PathBuf::from("/home/user/game")
-        );
-    }
-
-    #[test]
     fn finds_windows_profile_on_drive() -> anyhow::Result<()> {
-        let base = std::env::temp_dir().join(format!("yapzm-prof-{}", std::process::id()));
+        let base = std::env::temp_dir().join(format!("snapoid-prof-{}", std::process::id()));
         let users = base.join("Users");
         std::fs::create_dir_all(users.join("Public"))?;
         std::fs::create_dir_all(users.join("Alpha/AppData/Roaming"))?;

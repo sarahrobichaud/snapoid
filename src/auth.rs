@@ -1,6 +1,6 @@
 //! The remembered Steam account for steamcmd.
 //!
-//! `yapzm auth login` runs an interactive steamcmd login and, when the
+//! `snapoid auth login` runs an interactive steamcmd login and, when the
 //! credentials verify, remembers the account name in `auth.json` in the
 //! store root. Downloads then reuse it instead of requiring `--login` on
 //! every invocation. Only the account *name* is stored here — the
@@ -68,7 +68,7 @@ mod tests {
 
     #[test]
     fn save_and_load_roundtrip() -> Result<()> {
-        let base = std::env::temp_dir().join(format!("yapzm-auth-{}", std::process::id()));
+        let base = std::env::temp_dir().join(format!("snapoid-auth-{}", std::process::id()));
         fs::remove_dir_all(&base).ok();
 
         assert_eq!(load(&base), None);

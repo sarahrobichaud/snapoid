@@ -47,7 +47,7 @@ pub struct LaunchOptions {
 }
 
 /// Admin password used when none was given and the server has none yet.
-pub const DEFAULT_ADMIN_PASSWORD: &str = "yapzm";
+pub const DEFAULT_ADMIN_PASSWORD: &str = "snapoid";
 
 /// The main classes of the client and dedicated-server launch lines:
 /// everything before them is JVM options, everything after them game
@@ -169,7 +169,7 @@ fn insert_jvm_option(args: &mut Vec<String>, option: String) {
 /// Run the game attached to this console and block until it exits.
 /// The game's output is suppressed.
 ///
-/// The child shares yapzm's console, so the console itself delivers
+/// The child shares snapoid's console, so the console itself delivers
 /// Ctrl+C to the game, and closing the terminal closes the game too
 /// (verified on native Windows; under WSL a closed terminal may leave
 /// the game running — accepted edge case).
@@ -258,7 +258,7 @@ fn client_args(sep: &str, cachedir: &str, nosteam: bool) -> Vec<String> {
 /// `Saves/Multiplayer/<name>/`). "servertest" is only the game's
 /// default; a per-instance name isolates instances from each other.
 pub fn server_name(instance: &GameInstance) -> String {
-    format!("yapzm_server_{}", sanitize_name(&instance.name))
+    format!("snapoid_server_{}", sanitize_name(&instance.name))
 }
 
 /// Dedicated server launch line, from ProjectZomboidServer.bat, plus
@@ -353,7 +353,7 @@ mod tests {
     use super::*;
 
     fn game_dir_with(java: &str) -> PathBuf {
-        let base = std::env::temp_dir().join(format!("yapzm-launch-{}", std::process::id()));
+        let base = std::env::temp_dir().join(format!("snapoid-launch-{}", std::process::id()));
         let dir = base.join(java.replace(['/', ':'], "_"));
         std::fs::create_dir_all(dir.join("jre64/bin")).unwrap();
         std::fs::write(dir.join("jre64/bin").join(java), "jvm").unwrap();
@@ -378,7 +378,7 @@ mod tests {
 
     #[test]
     fn server_args_match_bat() {
-        let args = server_args(";", r"C:\p", "yapzm_server_test");
+        let args = server_args(";", r"C:\p", "snapoid_server_test");
         let text = args.join(" ");
         assert!(text.contains("zombie.network.GameServer"));
         assert!(
@@ -394,14 +394,14 @@ mod tests {
         assert!(text.contains("-modfolders mods"));
         // Per-instance server files instead of the shared "servertest"
         // default.
-        assert!(text.contains("-servername yapzm_server_test"));
+        assert!(text.contains("-servername snapoid_server_test"));
         // The password is added by plan(), not here.
         assert!(!text.contains("-adminpassword"));
     }
 
     #[test]
     fn reads_server_port_from_ini() {
-        let base = std::env::temp_dir().join(format!("yapzm-port-{}", std::process::id()));
+        let base = std::env::temp_dir().join(format!("snapoid-port-{}", std::process::id()));
         let profile = base.join("profile");
 
         // No ini yet (fresh profile): game default.
@@ -423,7 +423,7 @@ mod tests {
 
     #[test]
     fn detects_existing_server_admin() {
-        let base = std::env::temp_dir().join(format!("yapzm-admin-{}", std::process::id()));
+        let base = std::env::temp_dir().join(format!("snapoid-admin-{}", std::process::id()));
         let profile = base.join("profile");
 
         // No db yet: fresh profile, no admin.
@@ -444,7 +444,7 @@ mod tests {
 
     #[test]
     fn debug_flag_reaches_the_game_args() {
-        let base = std::env::temp_dir().join(format!("yapzm-dbg-{}", std::process::id()));
+        let base = std::env::temp_dir().join(format!("snapoid-dbg-{}", std::process::id()));
         let game = base.join("game");
         std::fs::create_dir_all(game.join("jre64/bin")).unwrap();
         std::fs::write(game.join("jre64/bin/java.exe"), "jvm").unwrap();
@@ -479,7 +479,7 @@ mod tests {
 
     #[test]
     fn server_password_set_on_first_launch_only() {
-        let base = std::env::temp_dir().join(format!("yapzm-pw-{}", std::process::id()));
+        let base = std::env::temp_dir().join(format!("snapoid-pw-{}", std::process::id()));
         let game = base.join("game");
         std::fs::create_dir_all(game.join("jre64/bin")).unwrap();
         std::fs::write(game.join("jre64/bin/java.exe"), "jvm").unwrap();
@@ -532,7 +532,7 @@ mod tests {
 
     #[test]
     fn zombie_buddy_gets_its_agent_flag_when_installed() {
-        let base = std::env::temp_dir().join(format!("yapzm-zb-flag-{}", std::process::id()));
+        let base = std::env::temp_dir().join(format!("snapoid-zb-flag-{}", std::process::id()));
         let game = base.join("game");
         std::fs::create_dir_all(game.join("jre64/bin")).unwrap();
         std::fs::write(game.join("jre64/bin/java.exe"), "jvm").unwrap();

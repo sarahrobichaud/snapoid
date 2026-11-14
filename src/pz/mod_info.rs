@@ -17,7 +17,7 @@ use std::path::Path;
 
 use super::version::Version;
 
-/// The fields of one mod.info file yapzm keeps. Unknown keys are
+/// The fields of one mod.info file snapoid keeps. Unknown keys are
 /// ignored.
 #[derive(Debug, Default, PartialEq)]
 pub struct ModInfo {
@@ -41,7 +41,7 @@ pub struct ModInfo {
 
 /// What a matched key means. `Ignored` keys are matched anyway so a
 /// line carrying one is not mistaken for a later key (the game reads
-/// them; yapzm just does not keep them).
+/// them; snapoid just does not keep them).
 #[derive(Debug, Clone, Copy)]
 enum Field {
     Id,

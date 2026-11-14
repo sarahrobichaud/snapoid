@@ -1,5 +1,5 @@
 #!/bin/sh
-# Deploy the project to the Windows filesystem (C:\src\yapzm) so it can
+# Deploy the project to the Windows filesystem (C:\src\snapoid) so it can
 # be built and tested with the native Windows toolchain instead of through
 # the slow 9p path.
 #
@@ -16,7 +16,7 @@
 set -eu
 
 PROJECT_DIR=$(cd "$(dirname "$0")/.." && pwd)
-DEST=/mnt/c/src/yapzm
+DEST=/mnt/c/src/snapoid
 
 mkdir -p "$(dirname "$DEST")"
 rsync -rlpt --delete \
@@ -30,5 +30,5 @@ if [ "${1:-}" = "--build" ]; then
     # Same env handling as check-windows.sh: incremental compilation
     # cannot lock files on 9p, and artifacts stay on the native Windows
     # filesystem.
-    exec powershell.exe -NoProfile -Command "Set-Item Env:CARGO_INCREMENTAL -Value '0'; Set-Item Env:CARGO_TARGET_DIR -Value 'C:\Users\zyriel\yapzm-target'; cargo build --release"
+    exec powershell.exe -NoProfile -Command "Set-Item Env:CARGO_INCREMENTAL -Value '0'; Set-Item Env:CARGO_TARGET_DIR -Value 'C:\Users\zyriel\snapoid-target'; cargo build --release"
 fi

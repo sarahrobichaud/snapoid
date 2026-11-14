@@ -1,14 +1,14 @@
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
-use anyhow::Context as _;
 use clap::Subcommand;
 
-use crate::auth;
-use crate::discovery;
-use crate::download::{self, DownloadRequest};
-use crate::pz::{self, probe};
-use crate::registry;
-use crate::steamcmd;
+use snapoid::auth;
+use snapoid::download::{self, DownloadRequest};
+use snapoid::pz::{self, probe};
+use snapoid::registry;
+use snapoid::steam;
+use snapoid::steamcmd;
+use snapoid::store::{self, Store};
 
 use super::open_store;
 use crate::report;
@@ -35,7 +35,7 @@ pub enum VersionCommand {
         /// Version to download (see `version available`), or "latest"
         version: String,
         /// Steam account name for steamcmd (default: the account
-        /// remembered by `yapzm auth login`)
+        /// remembered by `snapoid auth login`)
         #[arg(short, long)]
         login: Option<String>,
         /// Depot ID override (default: the registry entry's depot, else
@@ -46,33 +46,16 @@ pub enum VersionCommand {
         #[arg(long)]
         force: bool,
     },
-    /// Re-download a stored version to repair missing or corrupted files
-    Repair {
-        /// Stored version to repair (see `version list`)
-        version: String,
-        /// Steam account name for steamcmd (default: the account
-        /// remembered by `yapzm auth login`)
-        #[arg(short, long)]
-        login: Option<String>,
-        /// Depot ID override (default: the registry entry's depot, else
-        /// the Windows depot 108604)
-        #[arg(long)]
-        depot: Option<u64>,
-    },
 }
 
 pub fn run(command: VersionCommand) -> anyhow::Result<()> {
     match command {
         VersionCommand::Detect => {
-            let components = discovery::discover();
-            let paths = components
-                .steam
-                .as_ref()
-                .context("no Steam installation found")?;
+            let paths = steam::locate()?;
             let info = match paths.game_dir.as_deref() {
                 Some(game_dir) => probe::detect_dir(game_dir)?,
                 None => {
-                    crate::warn!("no game install found");
+                    snapoid::warn!("no game install found");
                     probe::GameVersionInfo::default()
                 }
             };
@@ -83,11 +66,7 @@ pub fn run(command: VersionCommand) -> anyhow::Result<()> {
             report::print_version_info(&info);
         }
         VersionCommand::Snapshot => {
-            let components = discovery::discover();
-            let paths = components
-                .steam
-                .as_ref()
-                .context("no Steam installation found")?;
+            let paths = steam::locate()?;
             let Some(game_dir) = paths.game_dir.as_deref() else {
                 anyhow::bail!("Project Zomboid install not found; nothing to snapshot");
             };
@@ -96,7 +75,8 @@ pub fn run(command: VersionCommand) -> anyhow::Result<()> {
                 anyhow::bail!("could not detect the installed game version");
             };
 
-            let store = open_store(&components)?;
+            let root = store::locate_root(paths.game_dir.as_deref())?;
+            let store = Store::open(&root)?;
             let buildid = pz::appmanifest::buildid_for_install(game_dir, pz::APP_ID);
             let game = store.snapshot_version(
                 game_dir,
@@ -108,8 +88,7 @@ pub fn run(command: VersionCommand) -> anyhow::Result<()> {
             report::print_stored_game(&game);
         }
         VersionCommand::List => {
-            let components = discovery::discover();
-            let store = open_store(&components)?;
+            let store = open_store()?;
             let games = store.list_games()?;
             report::print_games(&games);
         }
@@ -123,15 +102,13 @@ pub fn run(command: VersionCommand) -> anyhow::Result<()> {
             depot,
             force,
         } => {
-            let components = discovery::discover();
-            let program = components
-                .steamcmd
-                .clone()
-                .context("steamcmd not found; install it or set YAPZM_STEAMCMD")?;
-            let store = open_store(&components)?;
+            let program = steamcmd::locate()?;
+            let paths = steam::locate().ok();
+            let root = store::locate_root(paths.as_ref().and_then(|p| p.game_dir.as_deref()))?;
+            let store = Store::open(&root)?;
             let cmd = steamcmd::Process::new(program);
-            // Fall back to the account remembered by `yapzm auth login`.
-            let login = login.or_else(|| auth::load(store.root()));
+            // Fall back to the account remembered by `snapoid auth login`.
+            let login = login.or_else(|| auth::load(&root));
             let downloaded = download::download(
                 &store,
                 &cmd,
@@ -140,37 +117,10 @@ pub fn run(command: VersionCommand) -> anyhow::Result<()> {
                     login,
                     depot,
                     force,
-                    live_game_dir: components.game_dir().map(Path::to_path_buf),
+                    live_game_dir: paths.and_then(|p| p.game_dir),
                 },
             )?;
             report::print_downloaded(&downloaded);
-        }
-        VersionCommand::Repair {
-            version,
-            login,
-            depot,
-        } => {
-            let components = discovery::discover();
-            let program = components
-                .steamcmd
-                .clone()
-                .context("steamcmd not found; install it or set YAPZM_STEAMCMD")?;
-            let store = open_store(&components)?;
-            let cmd = steamcmd::Process::new(program);
-            // Fall back to the account remembered by `yapzm auth login`.
-            let login = login.or_else(|| auth::load(store.root()));
-            let repaired = download::repair(
-                &store,
-                &cmd,
-                &DownloadRequest {
-                    version,
-                    login,
-                    depot,
-                    force: true,
-                    live_game_dir: components.game_dir().map(Path::to_path_buf),
-                },
-            )?;
-            report::print_downloaded(&repaired);
         }
     }
     Ok(())

@@ -1,7 +1,7 @@
 //! ZombieBuddy: a mod that ships a Java agent (a jar) plus a native
 //! loader for it. The mod's manual instructions ask for a copy of both
 //! in the game folder and `-agentlib:zbNative` in the launch options;
-//! yapzm automates this without touching the shared game folder more
+//! snapoid automates this without touching the shared game folder more
 //! than the mod's own loader requires:
 //!
 //! - The native loader (`zbNative.dll`) is copied into the instance's
@@ -53,7 +53,7 @@ pub fn is_mod_name(name: &str) -> bool {
 /// ZombieBuddy loads before everything else when installed: its native
 /// loader must be up before any other mod's code runs, regardless of
 /// what the manifests declare (the game's own dialog asks for a manual
-/// agent setup; yapzm automates it). Dependency resolution runs
+/// agent setup; snapoid automates it). Dependency resolution runs
 /// first, so the promotion only overrides the tail of the order.
 pub fn promote_first(mod_ids: &mut [String]) {
     if let Some(index) = mod_ids.iter().position(|id| is_mod_name(id)) {
@@ -223,7 +223,7 @@ mod tests {
 
     #[test]
     fn installs_loader_and_jar_into_the_agent_dir_and_jar_into_the_game_dir() -> Result<()> {
-        let base = std::env::temp_dir().join(format!("yapzm-zb-{}", std::process::id()));
+        let base = std::env::temp_dir().join(format!("snapoid-zb-{}", std::process::id()));
         let (mod_dir, agent_dir, game_dir) = mod_fixture(&base);
 
         let copied = install_agent(&mod_dir, &agent_dir, &game_dir)?;
@@ -261,7 +261,7 @@ mod tests {
 
     #[test]
     fn a_mod_without_a_loader_never_touches_the_game_folder() -> Result<()> {
-        let base = std::env::temp_dir().join(format!("yapzm-zb-nodll-{}", std::process::id()));
+        let base = std::env::temp_dir().join(format!("snapoid-zb-nodll-{}", std::process::id()));
         let mod_dir = base.join("mods/ZombieBuddy");
         let agent_dir = base.join("instance/test/agent");
         let game_dir = base.join("game");
@@ -280,7 +280,7 @@ mod tests {
 
     #[test]
     fn a_mod_without_agent_files_yields_nothing() -> Result<()> {
-        let base = std::env::temp_dir().join(format!("yapzm-zb-empty-{}", std::process::id()));
+        let base = std::env::temp_dir().join(format!("snapoid-zb-empty-{}", std::process::id()));
         let mod_dir = base.join("mods/ZombieBuddy");
         let agent_dir = base.join("instance/test/agent");
         let game_dir = base.join("game");
@@ -299,7 +299,7 @@ mod tests {
 
     #[test]
     fn ensure_agent_self_heals_a_missing_agent_dir() -> Result<()> {
-        let base = std::env::temp_dir().join(format!("yapzm-zb-heal-{}", std::process::id()));
+        let base = std::env::temp_dir().join(format!("snapoid-zb-heal-{}", std::process::id()));
         let (mod_dir, agent_dir, game_dir) = mod_fixture(&base);
         fs::remove_dir_all(&agent_dir)?;
 
@@ -317,7 +317,7 @@ mod tests {
 
     #[test]
     fn ensure_agent_refreshes_a_stale_game_folder_jar() -> Result<()> {
-        let base = std::env::temp_dir().join(format!("yapzm-zb-stale-{}", std::process::id()));
+        let base = std::env::temp_dir().join(format!("snapoid-zb-stale-{}", std::process::id()));
         let (mod_dir, agent_dir, game_dir) = mod_fixture(&base);
         install_agent(&mod_dir, &agent_dir, &game_dir)?;
 
@@ -332,7 +332,7 @@ mod tests {
 
     #[test]
     fn detects_an_installed_mod_in_the_profile() -> Result<()> {
-        let base = std::env::temp_dir().join(format!("yapzm-zb-prof-{}", std::process::id()));
+        let base = std::env::temp_dir().join(format!("snapoid-zb-prof-{}", std::process::id()));
         let profile = base.join("profile");
         assert!(!installed_in(&profile));
         fs::create_dir_all(profile.join("mods").join(MOD_ID))?;

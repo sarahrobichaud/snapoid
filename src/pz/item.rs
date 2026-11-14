@@ -316,7 +316,7 @@ mod tests {
 
     #[test]
     fn recognizes_b41_b42_and_hybrid() {
-        let base = std::env::temp_dir().join(format!("yapzm-item-{}", std::process::id()));
+        let base = std::env::temp_dir().join(format!("snapoid-item-{}", std::process::id()));
 
         // B41: root manifest only.
         let item = base.join("b41");
@@ -343,7 +343,7 @@ mod tests {
 
     #[test]
     fn identity_comes_from_the_highest_version_folder() {
-        let base = std::env::temp_dir().join(format!("yapzm-item-id-{}", std::process::id()));
+        let base = std::env::temp_dir().join(format!("snapoid-item-id-{}", std::process::id()));
         let item = base.join("item");
         write(&item, "mods/M/42.16/mod.info", "name=M 16\nid=M16\nauthor=A\n");
         write(&item, "mods/M/42.22/mod.info", "name=M 22\nid=M22\n");
@@ -364,7 +364,7 @@ mod tests {
 
     #[test]
     fn captures_per_folder_ranges() {
-        let base = std::env::temp_dir().join(format!("yapzm-item-agg-{}", std::process::id()));
+        let base = std::env::temp_dir().join(format!("snapoid-item-agg-{}", std::process::id()));
         let item = base.join("item");
         write(
             &item,
@@ -399,7 +399,7 @@ mod tests {
 
     #[test]
     fn captures_common_and_root_manifests() {
-        let base = std::env::temp_dir().join(format!("yapzm-item-cm-{}", std::process::id()));
+        let base = std::env::temp_dir().join(format!("snapoid-item-cm-{}", std::process::id()));
         let item = base.join("item");
         write(&item, "mods/M/mod.info", "name=M\nid=M\nversionMax=41.99\n");
         write(&item, "mods/M/common/mod.info", "name=M\nid=M\nversionMin=42.0\n");
@@ -416,7 +416,7 @@ mod tests {
 
     #[test]
     fn captures_media_only_version_folders() {
-        let base = std::env::temp_dir().join(format!("yapzm-item-mo-{}", std::process::id()));
+        let base = std::env::temp_dir().join(format!("snapoid-item-mo-{}", std::process::id()));
         let item = base.join("item");
         // The Project Viewpoint shape: a version folder with content
         // but no mod.info, recognized through common/.
@@ -442,7 +442,7 @@ mod tests {
 
     #[test]
     fn version_folder_names_are_not_version_data() {
-        let base = std::env::temp_dir().join(format!("yapzm-item-vm-{}", std::process::id()));
+        let base = std::env::temp_dir().join(format!("snapoid-item-vm-{}", std::process::id()));
         let item = base.join("item");
         // Folder names lie: 42.0.5 truncates to 42.0 in the game's key.
         write(&item, "mods/M/42.0.5/mod.info", "name=M\nid=M\n");
@@ -462,7 +462,7 @@ mod tests {
 
     #[test]
     fn lowest_folder_skips_sub_floor_folders() {
-        let base = std::env::temp_dir().join(format!("yapzm-item-lf-{}", std::process::id()));
+        let base = std::env::temp_dir().join(format!("snapoid-item-lf-{}", std::process::id()));
         let item = base.join("item");
         write(&item, "mods/M/41/mod.info", "name=M\nid=M\n");
         write(&item, "mods/M/42.16/mod.info", "name=M\nid=M\n");

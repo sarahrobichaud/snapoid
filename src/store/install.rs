@@ -62,10 +62,10 @@ pub struct InstalledMod {
 }
 
 /// The install manifest written into the profile's mods folder: what
-/// yapzm installed there, and from which store version, so a later
+/// snapoid installed there, and from which store version, so a later
 /// install can offer updates instead of blind reinstalls. A plain file
 /// next to default.txt — the game only scans mod folders.
-pub const INSTALLED_MANIFEST: &str = "yapzm-mods.json";
+pub const INSTALLED_MANIFEST: &str = "snapoid-mods.json";
 
 /// One installed mod's provenance.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -267,7 +267,7 @@ fn copy_ops(mod_entry: &ModEntry, game: u64) -> Vec<CopyOp> {
 }
 
 impl Store {
-    /// The instance's install manifest: what yapzm has installed
+    /// The instance's install manifest: what snapoid has installed
     /// into its profile and from which store versions.
     pub fn instance_installed_manifest(&self, instance: &GameInstance) -> InstalledManifest {
         read_installed_manifest(&instance.profile_dir.join("mods"))
@@ -618,7 +618,7 @@ fn rewrite_manifest_unsafe(
 }
 
 /// Read the profile's install manifest; an empty one when absent or
-/// unreadable (the manifest is yapzm's own bookkeeping — a broken
+/// unreadable (the manifest is snapoid's own bookkeeping — a broken
 /// file must not block an install).
 pub(crate) fn read_installed_manifest(mods_dir: &Path) -> InstalledManifest {
     let path = mods_dir.join(INSTALLED_MANIFEST);
@@ -853,7 +853,7 @@ mod tests {
     /// - "B41 Only": root manifest only — skipped on B42.
     fn fixture(name: &str) -> Result<(Store, GameInstance, StoredMod, PathBuf)> {
         let base =
-            std::env::temp_dir().join(format!("yapzm-install-{name}-{}", std::process::id()));
+            std::env::temp_dir().join(format!("snapoid-install-{name}-{}", std::process::id()));
         let store = Store::open_at(&base)?;
 
         let game = store.game_dir("42.22.2");
@@ -1008,7 +1008,7 @@ mod tests {
             instance
                 .profile_dir
                 .join("Server")
-                .join("yapzm_server_test.ini"),
+                .join("snapoid_server_test.ini"),
         )?;
         assert_eq!(ini, "PublicName=test\nMods=ZombieBuddy;HM;MO;PM\n");
 
@@ -1083,7 +1083,7 @@ mod tests {
                 "Patch Mod",
                 "default.txt",
                 "reset-mods-42_00.txt",
-                "yapzm-mods.json"
+                "snapoid-mods.json"
             ]
         );
 
@@ -1099,7 +1099,7 @@ mod tests {
         let server_ini = instance
             .profile_dir
             .join("Server")
-            .join("yapzm_server_test.ini");
+            .join("snapoid_server_test.ini");
         assert_eq!(outcome.activation.server_ini, server_ini);
         let ini = fs::read_to_string(&server_ini)?;
         assert_eq!(ini, "PublicName=test\nMods=HM;MO;PM\n");
@@ -1237,8 +1237,8 @@ mod tests {
 
     #[test]
     fn server_ini_is_created_and_preserved() -> Result<()> {
-        let base = std::env::temp_dir().join(format!("yapzm-ini-{}", std::process::id()));
-        let ini = base.join("Server/yapzm_server_test.ini");
+        let base = std::env::temp_dir().join(format!("snapoid-ini-{}", std::process::id()));
+        let ini = base.join("Server/snapoid_server_test.ini");
 
         // Created fresh: browser-visible name plus the mod line.
         write_server_ini(&ini, &["A".to_owned(), "B".to_owned()], "home")?;
@@ -1394,7 +1394,7 @@ mod tests {
 
     #[test]
     fn mod_status_reflects_the_manifest() -> Result<()> {
-        let base = std::env::temp_dir().join(format!("yapzm-status-{}", std::process::id()));
+        let base = std::env::temp_dir().join(format!("snapoid-status-{}", std::process::id()));
         let item_dir = base.join("item-1");
         fs::create_dir_all(item_dir.join("mods/Plain/42"))?;
         fs::write(item_dir.join("mods/Plain/42/mod.info"), "name=P\nid=P\n")?;

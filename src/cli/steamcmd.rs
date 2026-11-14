@@ -1,10 +1,8 @@
 use std::path::PathBuf;
 
-use anyhow::Context as _;
 use clap::Subcommand;
 
-use crate::discovery;
-use crate::steamcmd::{self, SteamCmd as _, install};
+use snapoid::steamcmd::{self, SteamCmd as _, install};
 
 #[derive(Subcommand)]
 pub enum SteamcmdCommand {
@@ -21,26 +19,24 @@ pub enum SteamcmdCommand {
 /// Run steamcmd with the given arguments, handle steamcmd management
 /// subcommands, or show the located binary when there are none.
 pub fn run(command: Option<SteamcmdCommand>, args: Vec<String>) -> anyhow::Result<()> {
-    if let Some(SteamcmdCommand::Install { to }) = command {
-        let exe = install::install(to.as_deref())?;
-        println!("steamcmd installed: {}", exe.display());
-        // Only the conventional <drive>:\steamcmd locations are
-        // discovered automatically; a custom one needs the env override.
-        // Discovered after the install so a copy in a conventional
-        // location is recognized as found.
-        let components = discovery::discover();
-        if components.steamcmd.as_deref() != Some(exe.as_path()) {
-            println!("  yapzm will not find this copy on its own;");
-            println!("  set YAPZM_STEAMCMD to {}", exe.display());
-        }
-        println!("  log in once with: yapzm auth login <username>");
-        return Ok(());
+    if let Some(command) = command {
+        return match command {
+            SteamcmdCommand::Install { to } => {
+                let exe = install::install(to.as_deref())?;
+                println!("steamcmd installed: {}", exe.display());
+                // Only the conventional <drive>:\steamcmd locations are
+                // discovered automatically; a custom one needs the env
+                // override.
+                if steamcmd::locate().map(|found| found != exe).unwrap_or(true) {
+                    println!("  snapoid will not find this copy on its own;");
+                    println!("  set SNAPOID_STEAMCMD to {}", exe.display());
+                }
+                println!("  log in once with: snapoid auth login <username>");
+                Ok(())
+            }
+        };
     }
-    let components = discovery::discover();
-    let program = components
-        .steamcmd
-        .clone()
-        .context("steamcmd not found; install it or set YAPZM_STEAMCMD")?;
+    let program = steamcmd::locate()?;
     if args.is_empty() {
         println!("steamcmd: {}", program.display());
         return Ok(());

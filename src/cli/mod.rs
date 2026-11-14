@@ -9,15 +9,13 @@ mod paths;
 mod steamcmd;
 mod version;
 
-use anyhow::Context as _;
 use clap::{Parser, Subcommand};
 
-use crate::discovery;
-use crate::logger;
+use snapoid::logger;
 
 #[derive(Parser)]
 #[command(
-    name = "yapzm",
+    name = "snapoid",
     version,
     about = "Version manager for Project Zomboid workshop mods",
     long_about = None,
@@ -81,15 +79,10 @@ pub fn run() -> anyhow::Result<()> {
     }
 }
 
-/// Open the store at the discovered root. Steam may be missing — the
-/// store location only leans on the game drive under WSL, so listing
-/// still works without an install.
-pub(crate) fn open_store(
-    components: &discovery::Components,
-) -> anyhow::Result<crate::store::Store> {
-    let root = components
-        .store_root
-        .as_deref()
-        .context("no mod store root found")?;
-    crate::store::Store::open(root)
+/// Open the store, tolerating a missing Steam install (the store location
+/// depends on the game drive under WSL, but listing should still work).
+pub(crate) fn open_store() -> anyhow::Result<snapoid::store::Store> {
+    let game_dir = snapoid::steam::locate().ok().and_then(|p| p.game_dir);
+    let root = snapoid::store::locate_root(game_dir.as_deref())?;
+    snapoid::store::Store::open(&root)
 }

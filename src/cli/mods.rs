@@ -1,16 +1,15 @@
 use std::collections::HashMap;
 use std::path::Path;
 
-use anyhow::Context as _;
 use clap::{ArgGroup, Subcommand};
 
-use crate::auth;
-use crate::discovery;
-use crate::remote;
-use crate::scanner::workshop;
-use crate::steamcmd;
-use crate::store::{Source, Store};
-use crate::workshop as workshop_dl;
+use snapoid::auth;
+use snapoid::remote;
+use snapoid::scanner::workshop;
+use snapoid::steam;
+use snapoid::steamcmd;
+use snapoid::store::{self, Source, Store};
+use snapoid::workshop as workshop_dl;
 
 use crate::report;
 use crate::ui;
@@ -23,7 +22,7 @@ pub enum ModsCommand {
         /// The local Steam workshop content
         #[arg(long)]
         workshop: bool,
-        /// The local yapzm store
+        /// The local snapoid store
         #[arg(long)]
         store: bool,
     },
@@ -75,17 +74,13 @@ pub fn run(command: ModsCommand) -> anyhow::Result<()> {
 
 /// List installed workshop items and the mods they contain.
 fn list() -> anyhow::Result<()> {
-    let components = discovery::discover();
-    let paths = components
-        .steam
-        .as_ref()
-        .context("no Steam install found")?;
-    let items = workshop::scan(paths)?;
+    let paths = steam::locate()?;
+    let items = workshop::scan(&paths)?;
     if items.is_empty() {
         println!("No workshop items installed for Project Zomboid.");
         return Ok(());
     }
-    crate::info!("found {} workshop item(s)", items.len());
+    snapoid::info!("found {} workshop item(s)", items.len());
     report::print_scan(&items);
     Ok(())
 }
@@ -93,14 +88,13 @@ fn list() -> anyhow::Result<()> {
 /// List the workshop items in the local store, from the metadata
 /// captured at save time.
 fn list_store() -> anyhow::Result<()> {
-    let components = discovery::discover();
-    let store = super::open_store(&components)?;
+    let store = super::open_store()?;
     let items = store.list_mods()?;
     if items.is_empty() {
-        println!("No mods stored; update some with `yapzm mods update --workshop`.");
+        println!("No mods stored; update some with `snapoid mods update --workshop`.");
         return Ok(());
     }
-    crate::info!("{} workshop item(s) stored", items.len());
+    snapoid::info!("{} workshop item(s) stored", items.len());
     report::print_stored_mods(&items);
     Ok(())
 }
@@ -109,14 +103,13 @@ fn list_store() -> anyhow::Result<()> {
 /// the result.
 #[cfg(debug_assertions)]
 fn repair_meta() -> anyhow::Result<()> {
-    let components = discovery::discover();
-    let store = super::open_store(&components)?;
+    let store = super::open_store()?;
     let repaired = store.repair_mod_meta()?;
     if repaired.is_empty() {
         println!("No mods stored; nothing to repair.");
         return Ok(());
     }
-    crate::info!("rebuilt {} mod manifest(s)", repaired.len());
+    snapoid::info!("rebuilt {} mod manifest(s)", repaired.len());
     report::print_stored_mods(&repaired);
     Ok(())
 }
@@ -125,22 +118,15 @@ fn repair_meta() -> anyhow::Result<()> {
 /// workshop dirs, otherwise steamcmd downloads the latest version of
 /// each item.
 fn update(copy: bool) -> anyhow::Result<()> {
-    let components = discovery::discover();
-    let paths = components
-        .steam
-        .as_ref()
-        .context("no Steam install found")?;
-    let items = workshop::scan(paths)?;
+    let paths = steam::locate()?;
+    let items = workshop::scan(&paths)?;
     if items.is_empty() {
         println!("No workshop items installed for Project Zomboid.");
         return Ok(());
     }
 
-    let root = components
-        .store_root
-        .as_deref()
-        .context("no mod store root found")?;
-    let store = Store::open(root)?;
+    let root = store::locate_root(paths.game_dir.as_deref())?;
+    let store = Store::open(&root)?;
 
     let mut saved = 0usize;
     let mut skipped = 0usize;
@@ -152,7 +138,7 @@ fn update(copy: bool) -> anyhow::Result<()> {
                 && item.time_updated > 0
                 && stored.time_updated >= item.time_updated
             {
-                crate::info!("mod {} already stored; skipping", item.id);
+                snapoid::info!("mod {} already stored; skipping", item.id);
                 skipped += 1;
                 continue;
             }
@@ -178,7 +164,7 @@ fn update(copy: bool) -> anyhow::Result<()> {
         let remote = match remote::web::fetch_remote(&ids) {
             Ok(items) => items,
             Err(error) => {
-                crate::warn!("could not query the workshop ({error:#}); downloading everything");
+                snapoid::warn!("could not query the workshop ({error:#}); downloading everything");
                 Vec::new()
             }
         };
@@ -212,15 +198,12 @@ fn update(copy: bool) -> anyhow::Result<()> {
             return Ok(());
         }
 
-        let program = components
-            .steamcmd
-            .clone()
-            .context("steamcmd not found; install it or set YAPZM_STEAMCMD")?;
+        let program = steamcmd::locate()?;
         let cmd = steamcmd::Process::new(program);
         // Workshop items download anonymously by default; the account
-        // remembered by `yapzm auth login` is used when present, since
+        // remembered by `snapoid auth login` is used when present, since
         // some items need a subscription.
-        let login = auth::load(root).unwrap_or_else(|| "anonymous".to_owned());
+        let login = auth::load(&root).unwrap_or_else(|| "anonymous".to_owned());
         let content = workshop_dl::download_items(&cmd, &login, &stale)?;
         // The workshop ACF steamcmd maintains sits next to the content
         // dir's parent (.../steamapps/workshop/).
@@ -231,7 +214,7 @@ fn update(copy: bool) -> anyhow::Result<()> {
         for id in &stale {
             let from = content.join(id.to_string());
             if !dir_has_files(&from) {
-                crate::warn!("steamcmd did not download item {}; skipping", id);
+                snapoid::warn!("steamcmd did not download item {}; skipping", id);
                 continue;
             }
             let stored = store.adopt_mod_dir(

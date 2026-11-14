@@ -240,7 +240,7 @@ mod tests {
 
     #[test]
     fn adopts_downloaded_dir_into_place() -> Result<()> {
-        let base = std::env::temp_dir().join(format!("yapzm-adopt-{}", std::process::id()));
+        let base = std::env::temp_dir().join(format!("snapoid-adopt-{}", std::process::id()));
         let store = Store::open_at(&base)?;
 
         let from = base.join("incoming");

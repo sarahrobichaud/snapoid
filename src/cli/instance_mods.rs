@@ -2,11 +2,10 @@ use std::path::{Path, PathBuf};
 
 use clap::Subcommand;
 
-use crate::discovery;
-use crate::fmt;
-use crate::pz::compat::{self, Compatibility, Incompatibility};
-use crate::pz::item::ModEntry;
-use crate::store::{mod_install_status, ModStatus, SelectedMod, StoredMod};
+use snapoid::fmt;
+use snapoid::pz::compat::{self, Compatibility, Incompatibility};
+use snapoid::pz::item::ModEntry;
+use snapoid::store::{mod_install_status, ModStatus, SelectedMod, StoredMod};
 
 use super::open_store;
 use crate::report;
@@ -28,27 +27,19 @@ pub enum InstanceModsCommand {
     },
 }
 
-pub fn run(
-    components: &discovery::Components,
-    name: Option<String>,
-    command: InstanceModsCommand,
-) -> anyhow::Result<()> {
+pub fn run(name: Option<String>, command: InstanceModsCommand) -> anyhow::Result<()> {
     match command {
         InstanceModsCommand::Install { path } => match path {
-            Some(path) => install_modpack(components, name, &path),
-            None => install(components, name),
+            Some(path) => install_modpack(name, &path),
+            None => install(name),
         },
-        InstanceModsCommand::Pack { output } => pack(components, name, output),
+        InstanceModsCommand::Pack { output } => pack(name, output),
     }
 }
 
 /// Pack the instance's installed mods into a .modpack zip.
-fn pack(
-    components: &discovery::Components,
-    name: Option<String>,
-    output: Option<PathBuf>,
-) -> anyhow::Result<()> {
-    let store = open_store(components)?;
+fn pack(name: Option<String>, output: Option<PathBuf>) -> anyhow::Result<()> {
+    let store = open_store()?;
     let name = super::instance::resolve_name(&store, name)?;
     let instance = store.instance(&name)?;
     let output =
@@ -59,12 +50,8 @@ fn pack(
 }
 
 /// Install a .modpack file into the instance's profile.
-fn install_modpack(
-    components: &discovery::Components,
-    name: Option<String>,
-    path: &Path,
-) -> anyhow::Result<()> {
-    let store = open_store(components)?;
+fn install_modpack(name: Option<String>, path: &Path) -> anyhow::Result<()> {
+    let store = open_store()?;
     let name = super::instance::resolve_name(&store, name)?;
     let instance = store.instance(&name)?;
     let outcome = store.instance_install_modpack(&instance, path, ui::progress_factory)?;
@@ -86,13 +73,13 @@ struct Row<'a> {
 /// installed: up-to-date mods are reported and left alone, mods the
 /// store has newer captures of are asked about (update or keep), and
 /// the rest make the checklist.
-fn install(components: &discovery::Components, name: Option<String>) -> anyhow::Result<()> {
-    let store = open_store(components)?;
+fn install(name: Option<String>) -> anyhow::Result<()> {
+    let store = open_store()?;
     let name = super::instance::resolve_name(&store, name)?;
     let instance = store.instance(&name)?;
     let mods = store.list_mods()?;
     if mods.is_empty() {
-        println!("No mods stored; update some with `yapzm mods update --workshop`.");
+        println!("No mods stored; update some with `snapoid mods update --workshop`.");
         return Ok(());
     }
 

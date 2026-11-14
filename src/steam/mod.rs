@@ -1,16 +1,11 @@
 //! Steam locator: finds the Steam root, the library holding PZ workshop
 //! content, the PZ game install, and the Zomboid user data dir.
 
-pub mod client;
-pub mod steamcmd;
-pub mod workshop;
-
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use anyhow::{Context as _, Result};
 
-use crate::config;
 use crate::parser::acf::{self, Acf};
 use crate::platform;
 use crate::pz;
@@ -46,23 +41,13 @@ pub fn locate() -> Result<SteamPaths> {
     })
 }
 
-/// Find the Steam root. The YAPZM_STEAM override wins when set. Else
-/// checks, in order: the Windows registry (via reg.exe, which also works
-/// under WSL interop), %ProgramFiles(x86)%\Steam, the usual Linux/macOS
-/// locations, and /mnt/c for WSL installs. The first candidate containing
-/// a steamapps/ directory wins. Under WSL the registry's drive-letter
-/// path is not directly readable, so the /mnt/c fallback takes over there.
+/// Find the Steam root. Checks, in order: the Windows registry (via
+/// reg.exe, which also works under WSL interop), %ProgramFiles(x86)%\Steam,
+/// the usual Linux/macOS locations, and /mnt/c for WSL installs. The
+/// first candidate containing a steamapps/ directory wins. Under WSL the
+/// registry's drive-letter path is not directly readable, so the /mnt/c
+/// fallback takes over there.
 fn find_steam_dir() -> Result<PathBuf> {
-    if let Some(root) = config::steam_override() {
-        if root.join("steamapps").is_dir() {
-            return Ok(root);
-        }
-        anyhow::bail!(
-            "YAPZM_STEAM points to {}, which has no steamapps/ folder",
-            root.display()
-        );
-    }
-
     let mut candidates: Vec<PathBuf> = Vec::new();
 
     if let Some(path) = steam_dir_from_registry() {

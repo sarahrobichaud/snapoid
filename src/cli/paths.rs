@@ -1,26 +1,17 @@
-use anyhow::Context as _;
+use snapoid::pz;
+use snapoid::steam;
+use snapoid::steamcmd;
 
-use crate::pz::{self, install};
 use crate::report;
-use crate::steam::client::Client;
-use crate::steam::steamcmd;
-use crate::steam::workshop::Workshop;
 
-/// Show the discovered Steam and Project Zomboid layout.
+/// Show the resolved Steam and Project Zomboid paths.
 pub fn run() -> anyhow::Result<()> {
-    let client = Client::locate().context("no Steam installation found")?;
-    let workshop = Workshop::locate(&client, pz::APP_ID);
-    let install = match client.game_dir(pz::COMMON_DIR) {
-        Some(game_dir) => Some(install::probe_install(&game_dir)?),
-        None => None,
+    let paths = steam::locate()?;
+    let version = match paths.game_dir.as_deref() {
+        Some(game_dir) => pz::probe::detect_dir(game_dir)?,
+        None => pz::probe::GameVersionInfo::default(),
     };
     let steamcmd_path = steamcmd::locate().ok();
-    report::print_paths(
-        &client,
-        &workshop,
-        install.as_ref(),
-        install::user_dir().as_deref(),
-        steamcmd_path.as_deref(),
-    );
+    report::print_paths(&paths, &version, steamcmd_path.as_deref());
     Ok(())
 }

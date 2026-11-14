@@ -191,7 +191,7 @@ mod tests {
     /// error instead of a confusing spawn failure.
     #[test]
     fn detect_dir_rejects_non_game_directory() {
-        let dir = std::env::temp_dir().join("yapzm-probe-test-empty");
+        let dir = std::env::temp_dir().join("snapoid-probe-test-empty");
         std::fs::create_dir_all(&dir).unwrap();
         let error = detect_dir(&dir).unwrap_err().to_string();
         assert!(error.contains("not a Project Zomboid game directory"));
@@ -219,15 +219,7 @@ mod tests {
             eprintln!("no game install visible; skipping");
             return;
         };
-        // A leftover or partial Steam library dir is not a test failure:
-        // the smoke test only means to run against a real install.
-        let Ok(info) = detect_dir(&game_dir) else {
-            eprintln!(
-                "{} is not a valid game install; skipping",
-                game_dir.display()
-            );
-            return;
-        };
+        let info = detect_dir(&game_dir).unwrap();
         eprintln!("{info:?}");
         assert!(
             info.revision.is_some(),

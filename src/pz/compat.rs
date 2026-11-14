@@ -15,7 +15,7 @@ use std::fmt;
 use super::item::{FolderRange, Layout, ModEntry};
 use super::version;
 
-/// Whether a mod loads on a game version, as far as yapzm can tell
+/// Whether a mod loads on a game version, as far as snapoid can tell
 /// from its manifests and layout.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Compatibility {

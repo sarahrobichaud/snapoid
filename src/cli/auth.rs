@@ -1,11 +1,9 @@
-use std::path::PathBuf;
-
-use anyhow::Context as _;
 use clap::Subcommand;
 
-use crate::auth;
-use crate::discovery;
-use crate::steamcmd::{self, SteamCmd as _};
+use snapoid::auth;
+use snapoid::steam;
+use snapoid::steamcmd::{self, SteamCmd as _};
+use snapoid::store;
 
 /// Auth subcommand names, used to catch `auth login status`-style
 /// mix-ups where a subcommand is typed as an account name.
@@ -45,9 +43,9 @@ pub fn run(command: AuthCommand) -> anyhow::Result<()> {
 /// re-login afterwards proves the cache took, since that is exactly what
 /// downloads rely on.
 fn login(username: Option<String>) -> anyhow::Result<()> {
-    let components = discovery::discover();
-    let cmd = steamcmd::Process::new(steamcmd_exe(&components)?);
-    let root = store_root(&components)?;
+    let program = steamcmd::locate()?;
+    let cmd = steamcmd::Process::new(program);
+    let root = store_root()?;
 
     let explicit = username.is_some();
     let name = match username {
@@ -56,7 +54,7 @@ fn login(username: Option<String>) -> anyhow::Result<()> {
             Some(name) => name,
             None => anyhow::bail!(
                 "no account given and none remembered; pass the account \
-                 name, e.g. `yapzm auth login <username>`"
+                 name, e.g. `snapoid auth login <username>`"
             ),
         },
     };
@@ -74,7 +72,7 @@ fn login(username: Option<String>) -> anyhow::Result<()> {
     {
         auth::save(&root, name)?;
         println!("steamcmd login for {name} verified (cached credentials work)");
-        println!("  `yapzm version download` no longer needs --login");
+        println!("  `snapoid version download` no longer needs --login");
         return Ok(());
     }
 
@@ -85,16 +83,16 @@ fn login(username: Option<String>) -> anyhow::Result<()> {
         anyhow::bail!(
             "'{name}' looks like an auth subcommand, not a Steam account \
              name; to check the remembered account, run \
-             `yapzm auth status` — if the account really is named \
-             '{name}', run `yapzm auth login -- {name}`"
+             `snapoid auth status` — if the account really is named \
+             '{name}', run `snapoid auth login -- {name}`"
         );
     }
 
-    crate::info!("logging in to steamcmd as {name} (steamcmd prompts for the password)");
+    snapoid::info!("logging in to steamcmd as {name} (steamcmd prompts for the password)");
     if let Err(error) = cmd.run(&login_args(name)) {
         anyhow::bail!(
             "steamcmd login for {name} failed: {error}; check the account \
-             name and password, or run `yapzm auth status` to inspect \
+             name and password, or run `snapoid auth status` to inspect \
              the remembered account without logging in"
         );
     }
@@ -109,7 +107,7 @@ fn login(username: Option<String>) -> anyhow::Result<()> {
     }
     auth::save(&root, name)?;
     println!("steamcmd login for {name} verified and remembered");
-    println!("  `yapzm version download` no longer needs --login");
+    println!("  `snapoid version download` no longer needs --login");
     Ok(())
 }
 
@@ -124,9 +122,9 @@ fn login(username: Option<String>) -> anyhow::Result<()> {
 /// prompting) and revoke right after. An outcome probe then confirms the
 /// passwordless re-login really fails.
 fn logout(clear_credentials: bool) -> anyhow::Result<()> {
-    let components = discovery::discover();
-    let cmd = steamcmd::Process::new(steamcmd_exe(&components)?);
-    let root = store_root(&components)?;
+    let program = steamcmd::locate()?;
+    let cmd = steamcmd::Process::new(program);
+    let root = store_root()?;
     let name = auth::load(&root);
 
     let mut revoke = revoke_args(clear_credentials);
@@ -148,13 +146,13 @@ fn logout(clear_credentials: bool) -> anyhow::Result<()> {
         Some(name) => {
             let output = cmd.capture(&login_args(name))?;
             if steamcmd::login_ok(&output) {
-                crate::debug!("probe output: {output}");
+                snapoid::debug!("probe output: {output}");
                 if clear_credentials {
-                    crate::warn!("steamcmd still accepts cached credentials for {name}");
+                    snapoid::warn!("steamcmd still accepts cached credentials for {name}");
                 } else {
-                    crate::warn!(
+                    snapoid::warn!(
                         "steamcmd still accepts cached credentials for {name}; \
-                         run `yapzm auth logout --clear-credentials` to \
+                         run `snapoid auth logout --clear-credentials` to \
                          also drop the Steam Guard machine auth"
                     );
                 }
@@ -192,12 +190,12 @@ fn revoke_args(clear_credentials: bool) -> Vec<String> {
 /// A pure check: it never logs in and never prompts, and it fails when
 /// the account is not logged in.
 fn status() -> anyhow::Result<()> {
-    let components = discovery::discover();
-    let cmd = steamcmd::Process::new(steamcmd_exe(&components)?);
-    let root = store_root(&components)?;
+    let program = steamcmd::locate()?;
+    let cmd = steamcmd::Process::new(program);
+    let root = store_root()?;
 
     let Some(name) = auth::load(&root) else {
-        anyhow::bail!("no account remembered; run `yapzm auth login <username>`");
+        anyhow::bail!("no account remembered; run `snapoid auth login <username>`");
     };
     println!("account:  {name}");
     let ok = cmd
@@ -207,7 +205,7 @@ fn status() -> anyhow::Result<()> {
     if !ok {
         anyhow::bail!(
             "not logged in: steamcmd rejects the saved credentials for \
-             {name}; run `yapzm auth login` to re-authenticate"
+             {name}; run `snapoid auth login` to re-authenticate"
         );
     }
     println!("steamcmd: login OK (cached credentials work)");
@@ -221,18 +219,9 @@ fn login_args(name: &str) -> Vec<String> {
     vec!["+login".to_owned(), name.to_owned(), "+quit".to_owned()]
 }
 
-/// The discovered steamcmd executable; every auth action drives it.
-fn steamcmd_exe(components: &discovery::Components) -> anyhow::Result<PathBuf> {
-    components
-        .steamcmd
-        .clone()
-        .context("steamcmd not found; install it or set YAPZM_STEAMCMD")
-}
-
-/// The store root from discovery; the remembered account lives there.
-fn store_root(components: &discovery::Components) -> anyhow::Result<PathBuf> {
-    components
-        .store_root
-        .clone()
-        .context("no mod store root found")
+/// The store root, tolerating a missing Steam install (see
+/// `open_store`).
+fn store_root() -> anyhow::Result<std::path::PathBuf> {
+    let game_dir = steam::locate().ok().and_then(|p| p.game_dir);
+    store::locate_root(game_dir.as_deref())
 }

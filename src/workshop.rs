@@ -103,7 +103,7 @@ mod tests {
 
     #[test]
     fn reads_timeupdated_from_acf() {
-        let base = std::env::temp_dir().join(format!("yapzm-wsacf-{}", std::process::id()));
+        let base = std::env::temp_dir().join(format!("snapoid-wsacf-{}", std::process::id()));
         let steamapps = base.join("steamapps");
         fs::create_dir_all(&steamapps).unwrap();
         fs::write(

@@ -1,4 +1,4 @@
-//! Remote Steam queries: everything yapzm learns from Steam at query
+//! Remote Steam queries: everything snapoid learns from Steam at query
 //! time, as opposed to the local scanners and store. All reads are
 //! anonymous: they only touch public app metadata, so no account is
 //! needed.
