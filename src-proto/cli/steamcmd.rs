@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use clap::Subcommand;
 
-use snapoid::steamcmd::{self, SteamCmd as _, install};
+use yapzm_lib::steamcmd::{self, SteamCmd as _, install};
 
 #[derive(Subcommand)]
 pub enum SteamcmdCommand {

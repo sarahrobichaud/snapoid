@@ -1,6 +1,6 @@
 use clap::Subcommand;
 
-use snapoid::store::Store;
+use yapzm_lib::store::Store;
 
 use super::instance_mods;
 use super::open_store;
@@ -91,15 +91,15 @@ pub fn run(name: Option<String>, command: Option<InstanceCommand>) -> anyhow::Re
             let store = open_store()?;
             let name = resolve_name(&store, name)?;
             let instance = store.instance(&name)?;
-            let options = snapoid::launch::LaunchOptions {
+            let options = yapzm_lib::launch::LaunchOptions {
                 server,
                 nosteam,
                 admin_password,
                 debug,
             };
-            let plan = snapoid::launch::plan(&instance, &options)?;
+            let plan = yapzm_lib::launch::plan(&instance, &options)?;
             report::print_launched(&instance);
-            let status = snapoid::launch::run(&plan)?;
+            let status = yapzm_lib::launch::run(&plan)?;
             report::print_exited(&instance, &status);
         }
         Some(InstanceCommand::Reset) => {

@@ -3,13 +3,13 @@ use std::path::Path;
 
 use clap::{ArgGroup, Subcommand};
 
-use snapoid::auth;
-use snapoid::remote;
-use snapoid::scanner::workshop;
-use snapoid::steam;
-use snapoid::steamcmd;
-use snapoid::store::{self, Source, Store};
-use snapoid::workshop as workshop_dl;
+use yapzm_lib::auth;
+use yapzm_lib::remote;
+use yapzm_lib::scanner::workshop;
+use yapzm_lib::steam;
+use yapzm_lib::steamcmd;
+use yapzm_lib::store::{self, Source, Store};
+use yapzm_lib::workshop as workshop_dl;
 
 use crate::report;
 use crate::ui;
@@ -80,7 +80,7 @@ fn list() -> anyhow::Result<()> {
         println!("No workshop items installed for Project Zomboid.");
         return Ok(());
     }
-    snapoid::info!("found {} workshop item(s)", items.len());
+    yapzm_lib::info!("found {} workshop item(s)", items.len());
     report::print_scan(&items);
     Ok(())
 }
@@ -94,7 +94,7 @@ fn list_store() -> anyhow::Result<()> {
         println!("No mods stored; update some with `snapoid mods update --workshop`.");
         return Ok(());
     }
-    snapoid::info!("{} workshop item(s) stored", items.len());
+    yapzm_lib::info!("{} workshop item(s) stored", items.len());
     report::print_stored_mods(&items);
     Ok(())
 }
@@ -109,7 +109,7 @@ fn repair_meta() -> anyhow::Result<()> {
         println!("No mods stored; nothing to repair.");
         return Ok(());
     }
-    snapoid::info!("rebuilt {} mod manifest(s)", repaired.len());
+    yapzm_lib::info!("rebuilt {} mod manifest(s)", repaired.len());
     report::print_stored_mods(&repaired);
     Ok(())
 }
@@ -138,7 +138,7 @@ fn update(copy: bool) -> anyhow::Result<()> {
                 && item.time_updated > 0
                 && stored.time_updated >= item.time_updated
             {
-                snapoid::info!("mod {} already stored; skipping", item.id);
+                yapzm_lib::info!("mod {} already stored; skipping", item.id);
                 skipped += 1;
                 continue;
             }
@@ -164,7 +164,7 @@ fn update(copy: bool) -> anyhow::Result<()> {
         let remote = match remote::web::fetch_remote(&ids) {
             Ok(items) => items,
             Err(error) => {
-                snapoid::warn!("could not query the workshop ({error:#}); downloading everything");
+                yapzm_lib::warn!("could not query the workshop ({error:#}); downloading everything");
                 Vec::new()
             }
         };
@@ -214,7 +214,7 @@ fn update(copy: bool) -> anyhow::Result<()> {
         for id in &stale {
             let from = content.join(id.to_string());
             if !dir_has_files(&from) {
-                snapoid::warn!("steamcmd did not download item {}; skipping", id);
+                yapzm_lib::warn!("steamcmd did not download item {}; skipping", id);
                 continue;
             }
             let stored = store.adopt_mod_dir(

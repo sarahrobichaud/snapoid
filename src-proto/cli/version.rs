@@ -2,13 +2,13 @@ use std::path::PathBuf;
 
 use clap::Subcommand;
 
-use snapoid::auth;
-use snapoid::download::{self, DownloadRequest};
-use snapoid::pz::{self, probe};
-use snapoid::registry;
-use snapoid::steam;
-use snapoid::steamcmd;
-use snapoid::store::{self, Store};
+use yapzm_lib::auth;
+use yapzm_lib::download::{self, DownloadRequest};
+use yapzm_lib::pz::{self, probe};
+use yapzm_lib::registry;
+use yapzm_lib::steam;
+use yapzm_lib::steamcmd;
+use yapzm_lib::store::{self, Store};
 
 use super::open_store;
 use crate::report;
@@ -55,7 +55,7 @@ pub fn run(command: VersionCommand) -> anyhow::Result<()> {
             let info = match paths.game_dir.as_deref() {
                 Some(game_dir) => probe::detect_dir(game_dir)?,
                 None => {
-                    snapoid::warn!("no game install found");
+                    yapzm_lib::warn!("no game install found");
                     probe::GameVersionInfo::default()
                 }
             };

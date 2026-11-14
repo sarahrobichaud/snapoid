@@ -1,9 +1,9 @@
 use clap::Subcommand;
 
-use snapoid::auth;
-use snapoid::steam;
-use snapoid::steamcmd::{self, SteamCmd as _};
-use snapoid::store;
+use yapzm_lib::auth;
+use yapzm_lib::steam;
+use yapzm_lib::steamcmd::{self, SteamCmd as _};
+use yapzm_lib::store;
 
 /// Auth subcommand names, used to catch `auth login status`-style
 /// mix-ups where a subcommand is typed as an account name.
@@ -88,7 +88,7 @@ fn login(username: Option<String>) -> anyhow::Result<()> {
         );
     }
 
-    snapoid::info!("logging in to steamcmd as {name} (steamcmd prompts for the password)");
+    yapzm_lib::info!("logging in to steamcmd as {name} (steamcmd prompts for the password)");
     if let Err(error) = cmd.run(&login_args(name)) {
         anyhow::bail!(
             "steamcmd login for {name} failed: {error}; check the account \
@@ -146,11 +146,11 @@ fn logout(clear_credentials: bool) -> anyhow::Result<()> {
         Some(name) => {
             let output = cmd.capture(&login_args(name))?;
             if steamcmd::login_ok(&output) {
-                snapoid::debug!("probe output: {output}");
+                yapzm_lib::debug!("probe output: {output}");
                 if clear_credentials {
-                    snapoid::warn!("steamcmd still accepts cached credentials for {name}");
+                    yapzm_lib::warn!("steamcmd still accepts cached credentials for {name}");
                 } else {
-                    snapoid::warn!(
+                    yapzm_lib::warn!(
                         "steamcmd still accepts cached credentials for {name}; \
                          run `snapoid auth logout --clear-credentials` to \
                          also drop the Steam Guard machine auth"

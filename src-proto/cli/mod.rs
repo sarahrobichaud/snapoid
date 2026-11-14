@@ -11,7 +11,7 @@ mod version;
 
 use clap::{Parser, Subcommand};
 
-use snapoid::logger;
+use yapzm_lib::logger;
 
 #[derive(Parser)]
 #[command(
@@ -81,8 +81,8 @@ pub fn run() -> anyhow::Result<()> {
 
 /// Open the store, tolerating a missing Steam install (the store location
 /// depends on the game drive under WSL, but listing should still work).
-pub(crate) fn open_store() -> anyhow::Result<snapoid::store::Store> {
-    let game_dir = snapoid::steam::locate().ok().and_then(|p| p.game_dir);
-    let root = snapoid::store::locate_root(game_dir.as_deref())?;
-    snapoid::store::Store::open(&root)
+pub(crate) fn open_store() -> anyhow::Result<yapzm_lib::store::Store> {
+    let game_dir = yapzm_lib::steam::locate().ok().and_then(|p| p.game_dir);
+    let root = yapzm_lib::store::locate_root(game_dir.as_deref())?;
+    yapzm_lib::store::Store::open(&root)
 }

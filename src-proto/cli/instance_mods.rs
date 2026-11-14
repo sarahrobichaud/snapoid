@@ -2,10 +2,10 @@ use std::path::{Path, PathBuf};
 
 use clap::Subcommand;
 
-use snapoid::fmt;
-use snapoid::pz::compat::{self, Compatibility, Incompatibility};
-use snapoid::pz::item::ModEntry;
-use snapoid::store::{mod_install_status, ModStatus, SelectedMod, StoredMod};
+use yapzm_lib::fmt;
+use yapzm_lib::pz::compat::{self, Compatibility, Incompatibility};
+use yapzm_lib::pz::item::ModEntry;
+use yapzm_lib::store::{mod_install_status, ModStatus, SelectedMod, StoredMod};
 
 use super::open_store;
 use crate::report;

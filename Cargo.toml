@@ -2,12 +2,22 @@
 name = "snapoid"
 version = "0.1.0"
 edition = "2024"
+default-run = "yapzm"
 
 # Binary ships under the yapzm name; the package keeps the repo name until
 # the repo itself is renamed.
 [[bin]]
 name = "yapzm"
 path = "src/main.rs"
+
+# The previous implementation, kept building as a separate prototype bin.
+[[bin]]
+name = "yapzm-proto"
+path = "src-proto/main.rs"
+
+[lib]
+name = "yapzm_lib"
+path = "src-proto/lib.rs"
 
 [dependencies]
 anyhow = "1"

@@ -1,10 +1,7 @@
-//! CLI layer: argument definitions and thin handlers that compose library
-//! entry points.
-
-mod cli;
-mod report;
-mod ui;
+//! Fresh rewrite of the yapzm CLI. The previous implementation is kept
+//! compilable as the `yapzm-proto` binary under `src-proto/`.
 
 fn main() -> anyhow::Result<()> {
-    cli::run()
+    println!("yapzm: rewrite in progress");
+    Ok(())
 }

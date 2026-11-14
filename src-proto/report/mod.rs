@@ -3,16 +3,16 @@
 
 use std::cmp::Ordering;
 
-use snapoid::download::Downloaded;
-use snapoid::fmt;
-use snapoid::pz::compat;
-use snapoid::pz::item::Layout;
-use snapoid::pz::probe::GameVersionInfo;
-use snapoid::pz::version;
-use snapoid::registry::Registry;
-use snapoid::scanner::workshop::{ModEntry, WorkshopItem};
-use snapoid::steam::SteamPaths;
-use snapoid::store::{
+use yapzm_lib::download::Downloaded;
+use yapzm_lib::fmt;
+use yapzm_lib::pz::compat;
+use yapzm_lib::pz::item::Layout;
+use yapzm_lib::pz::probe::GameVersionInfo;
+use yapzm_lib::pz::version;
+use yapzm_lib::registry::Registry;
+use yapzm_lib::scanner::workshop::{ModEntry, WorkshopItem};
+use yapzm_lib::steam::SteamPaths;
+use yapzm_lib::store::{
     GameInstance, InstallOutcome, PackedModpack, Source, StoredGame, StoredMod,
 };
 

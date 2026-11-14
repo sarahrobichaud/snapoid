@@ -1,6 +1,6 @@
-use snapoid::pz;
-use snapoid::steam;
-use snapoid::steamcmd;
+use yapzm_lib::pz;
+use yapzm_lib::steam;
+use yapzm_lib::steamcmd;
 
 use crate::report;
 
