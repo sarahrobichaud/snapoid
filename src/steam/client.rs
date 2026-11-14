@@ -35,17 +35,6 @@ impl Client {
         })
     }
 
-    /// Workshop content dir for an app: the first library holding it,
-    /// else the Steam root's default path.
-    pub fn workshop_dir(&self, app_id: u32) -> PathBuf {
-        let found = self
-            .libraries
-            .iter()
-            .map(|lib| workshop_dir_in(lib, app_id))
-            .find(|p| p.is_dir());
-        platform::normalize_path(found.unwrap_or_else(|| workshop_dir_in(&self.root, app_id)))
-    }
-
     /// Game install dir for an app: the first library holding
     /// `steamapps/common/<common_dir>`.
     pub fn game_dir(&self, common_dir: &str) -> Option<PathBuf> {
@@ -55,11 +44,6 @@ impl Client {
             .find(|p| p.is_dir())
             .map(platform::normalize_path)
     }
-}
-
-/// The workshop content path for an app within one library.
-fn workshop_dir_in(library: &Path, app_id: u32) -> PathBuf {
-    library.join(format!("steamapps/workshop/content/{app_id}"))
 }
 
 /// The Steam root: the explicit override when set, else the first
@@ -147,7 +131,7 @@ fn find_libraries(root: &Path) -> Result<Vec<PathBuf>> {
         match acf::parse(&text) {
             Ok(parsed) => {
                 for path in extra_libraries(&parsed) {
-                    if !libraries.contains(&path) {
+                    if !libraries.iter().any(|lib| same_library(lib, &path)) {
                         libraries.push(path);
                     }
                 }
@@ -180,6 +164,29 @@ fn extra_libraries(parsed: &Acf) -> Vec<PathBuf> {
     extra.into_iter().map(|(_, path)| path).collect()
 }
 
+/// Whether two paths refer to the same library root, across the path
+/// styles a Windows host can produce (native, WSL /mnt, registry).
+fn same_library(a: &Path, b: &Path) -> bool {
+    canonical_library(a) == canonical_library(b)
+}
+
+/// A canonical text form for comparing library roots. Windows-style
+/// paths (drive letter) compare case- and separator-insensitively;
+/// POSIX paths compare exactly.
+fn canonical_library(path: &Path) -> String {
+    let text = platform::windows_host_path(path)
+        .to_string_lossy()
+        .into_owned();
+    let is_windows_style = text.len() >= 2
+        && text.as_bytes()[1] == b':'
+        && text.as_bytes()[0].is_ascii_alphabetic();
+    if is_windows_style {
+        text.replace('/', "\\").to_lowercase()
+    } else {
+        text
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -210,23 +217,43 @@ mod tests {
     }
 
     #[test]
-    fn queries_pick_the_first_library_holding_the_content() {
+    fn matches_libraries_across_windows_host_path_styles() {
+        assert!(same_library(
+            Path::new("/mnt/c/Program Files (x86)/Steam"),
+            Path::new(r"C:\Program Files (x86)\Steam"),
+        ));
+        // The registry yields lowercase drives and forward slashes.
+        assert!(same_library(
+            Path::new("c:/program files (x86)/steam"),
+            Path::new(r"C:\Program Files (x86)\Steam"),
+        ));
+        assert!(!same_library(
+            Path::new("/mnt/c/Steam"),
+            Path::new(r"D:\Steam"),
+        ));
+        // POSIX paths compare exactly.
+        assert!(same_library(
+            Path::new("/home/u/.steam/steam"),
+            Path::new("/home/u/.steam/steam"),
+        ));
+        assert!(!same_library(
+            Path::new("/home/u/.steam/steam"),
+            Path::new("/home/u/.steam/Steam"),
+        ));
+    }
+
+    #[test]
+    fn game_dir_picks_the_first_library_holding_the_game() {
         let base = std::env::temp_dir().join(format!("yapzm-client-{}", std::process::id()));
         let root = base.join("root");
         let library = base.join("library");
-        let content = library.join(format!("steamapps/workshop/content/{}", 108600u32));
         let game = library.join("steamapps/common/ProjectZomboid");
-        std::fs::create_dir_all(&content).unwrap();
         std::fs::create_dir_all(&game).unwrap();
 
         let client = Client {
             root: root.clone(),
             libraries: vec![root, library.clone()],
         };
-        assert_eq!(
-            client.workshop_dir(108600),
-            platform::normalize_path(content)
-        );
         assert_eq!(
             client.game_dir("ProjectZomboid"),
             Some(platform::normalize_path(game))

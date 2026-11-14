@@ -7,11 +7,13 @@ use crate::download::Downloaded;
 use crate::fmt;
 use crate::pz::compat;
 use crate::pz::item::Layout;
+use crate::pz::install::GameInstall;
 use crate::pz::probe::GameVersionInfo;
 use crate::pz::version;
 use crate::registry::Registry;
 use crate::scanner::workshop::{ModEntry, WorkshopItem};
-use crate::steam::SteamPaths;
+use crate::steam::client::Client;
+use crate::steam::workshop::Workshop;
 use crate::store::{
     GameInstance, InstallOutcome, PackedModpack, Source, StoredGame, StoredMod,
 };
@@ -599,34 +601,57 @@ pub fn print_reset(instance: &GameInstance) {
     println!("  {}", instance.profile_dir.display());
 }
 
-/// Render the resolved Steam and Project Zomboid paths, grouped by
+/// Render the discovered Steam and Project Zomboid layout, grouped by
 /// category: game first (version, install, user data), then Steam.
 pub fn print_paths(
-    paths: &SteamPaths,
-    version: &GameVersionInfo,
+    client: &Client,
+    workshop: &Workshop,
+    install: Option<&GameInstall>,
+    user_dir: Option<&std::path::Path>,
     steamcmd: Option<&std::path::Path>,
 ) {
-    println!("Game version:     {}", describe_version(version));
+    println!("Game version:     {}", describe_install(install));
     println!(
         "Game install:     {}",
-        optional_path(paths.game_dir.as_deref())
+        optional_path(install.map(|i| i.dir.as_path()))
     );
-    println!(
-        "Zomboid user dir: {}",
-        optional_path(paths.zomboid_user_dir.as_deref())
-    );
+    println!("Zomboid user dir: {}", optional_path(user_dir));
     println!();
-    println!("Steam root:       {}", paths.steam_dir.display());
+    println!("Steam root:       {}", client.root.display());
+    print_extra_libraries(client);
     println!(
         "Workshop content: {}{}",
-        paths.workshop_content.display(),
-        if paths.workshop_content.is_dir() {
+        workshop.content_dir.display(),
+        if workshop.content_dir.is_dir() {
             ""
         } else {
             " (no content downloaded)"
         }
     );
     println!("SteamCMD:         {}", optional_path(steamcmd));
+}
+
+/// Format an install's version and build id for display.
+fn describe_install(install: Option<&GameInstall>) -> String {
+    let Some(install) = install else {
+        return "unknown (no game install found)".to_owned();
+    };
+    let mut text = describe_version(&install.version);
+    if let Some(buildid) = install.buildid {
+        text.push_str(&format!(", build {buildid}"));
+    }
+    text
+}
+
+/// List the libraries beyond the Steam root, aligned under the label.
+fn print_extra_libraries(client: &Client) {
+    let Some(first) = client.libraries.get(1..).and_then(|e| e.first()) else {
+        return;
+    };
+    println!("Extra libraries:  {}", first.display());
+    for lib in &client.libraries[2..] {
+        println!("                  {}", lib.display());
+    }
 }
 
 /// Format detected game version info for display.

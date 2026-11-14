@@ -57,6 +57,21 @@ pub fn wsl_drive_root(path: &Path) -> Option<PathBuf> {
     }
 }
 
+/// The Windows-host form of a path: under WSL, /mnt/<letter>/... becomes
+/// <letter>:\...; other paths are unchanged.
+pub fn windows_host_path(path: &Path) -> PathBuf {
+    let Some(drive_root) = wsl_drive_root(path) else {
+        return path.to_path_buf();
+    };
+    let rest = path.strip_prefix(&drive_root).unwrap_or(path);
+    let letter = drive_root
+        .file_name()
+        .map(|name| name.to_string_lossy().to_ascii_uppercase())
+        .unwrap_or_default();
+    let text = rest.to_string_lossy().replace('/', "\\");
+    PathBuf::from(format!("{letter}:\\{text}"))
+}
+
 /// Automounted WSL drive roots (/mnt/<letter>), sorted by letter.
 pub fn wsl_drives() -> Vec<PathBuf> {
     let mut drives: Vec<PathBuf> = std::fs::read_dir("/mnt")
@@ -188,6 +203,20 @@ mod tests {
                 PathBuf::from("c:/program files (x86)/steam/steamapps/common")
             );
         }
+    }
+
+    #[test]
+    fn maps_wsl_automount_paths_to_windows_host_form() {
+        assert_eq!(
+            windows_host_path(Path::new("/mnt/c/Program Files (x86)/Steam")),
+            PathBuf::from(r"C:\Program Files (x86)\Steam")
+        );
+        assert_eq!(windows_host_path(Path::new("/mnt/c")), PathBuf::from(r"C:\"));
+        // Non-automount paths are unchanged.
+        assert_eq!(
+            windows_host_path(Path::new("/home/user/game")),
+            PathBuf::from("/home/user/game")
+        );
     }
 
     #[test]
