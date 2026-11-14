@@ -9,8 +9,10 @@ mod paths;
 mod steamcmd;
 mod version;
 
+use anyhow::Context as _;
 use clap::{Parser, Subcommand};
 
+use crate::discovery;
 use crate::logger;
 
 #[derive(Parser)]
@@ -79,10 +81,15 @@ pub fn run() -> anyhow::Result<()> {
     }
 }
 
-/// Open the store, tolerating a missing Steam install (the store location
-/// depends on the game drive under WSL, but listing should still work).
-pub(crate) fn open_store() -> anyhow::Result<crate::store::Store> {
-    let game_dir = crate::steam::locate().ok().and_then(|p| p.game_dir);
-    let root = crate::store::locate_root(game_dir.as_deref())?;
-    crate::store::Store::open(&root)
+/// Open the store at the discovered root. Steam may be missing — the
+/// store location only leans on the game drive under WSL, so listing
+/// still works without an install.
+pub(crate) fn open_store(
+    components: &discovery::Components,
+) -> anyhow::Result<crate::store::Store> {
+    let root = components
+        .store_root
+        .as_deref()
+        .context("no mod store root found")?;
+    crate::store::Store::open(root)
 }

@@ -1,5 +1,6 @@
 use clap::Subcommand;
 
+use crate::discovery;
 use crate::store::Store;
 
 use super::instance_mods;
@@ -46,9 +47,10 @@ pub enum InstanceCommand {
 }
 
 pub fn run(name: Option<String>, command: Option<InstanceCommand>) -> anyhow::Result<()> {
+    let components = discovery::discover();
     match command {
         Some(InstanceCommand::New { name, version }) => {
-            let store = open_store()?;
+            let store = open_store(&components)?;
             let games = store.list_games()?;
             let version = match version {
                 Some(version) => version,
@@ -78,7 +80,7 @@ pub fn run(name: Option<String>, command: Option<InstanceCommand>) -> anyhow::Re
             report::print_instance(&instance);
         }
         Some(InstanceCommand::List) => {
-            let store = open_store()?;
+            let store = open_store(&components)?;
             let instances = store.list_instances()?;
             report::print_instances(&instances);
         }
@@ -88,7 +90,7 @@ pub fn run(name: Option<String>, command: Option<InstanceCommand>) -> anyhow::Re
             admin_password,
             debug,
         }) => {
-            let store = open_store()?;
+            let store = open_store(&components)?;
             let name = resolve_name(&store, name)?;
             let instance = store.instance(&name)?;
             let options = crate::launch::LaunchOptions {
@@ -103,16 +105,18 @@ pub fn run(name: Option<String>, command: Option<InstanceCommand>) -> anyhow::Re
             report::print_exited(&instance, &status);
         }
         Some(InstanceCommand::Reset) => {
-            let store = open_store()?;
+            let store = open_store(&components)?;
             let name = resolve_name(&store, name)?;
             let instance = store.instance_reset(&name)?;
             report::print_reset(&instance);
         }
-        Some(InstanceCommand::Mods { command }) => instance_mods::run(name, command)?,
+        Some(InstanceCommand::Mods { command }) => {
+            instance_mods::run(&components, name, command)?
+        }
         None => match name {
             // `instance <name>`: show the instance's details.
             Some(name) => {
-                let store = open_store()?;
+                let store = open_store(&components)?;
                 let instance = store.instance(&name)?;
                 report::print_instances(std::slice::from_ref(&instance));
             }

@@ -1,14 +1,14 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
+use anyhow::Context as _;
 use clap::Subcommand;
 
 use crate::auth;
+use crate::discovery;
 use crate::download::{self, DownloadRequest};
 use crate::pz::{self, probe};
 use crate::registry;
-use crate::steam;
 use crate::steamcmd;
-use crate::store::{self, Store};
 
 use super::open_store;
 use crate::report;
@@ -64,7 +64,11 @@ pub enum VersionCommand {
 pub fn run(command: VersionCommand) -> anyhow::Result<()> {
     match command {
         VersionCommand::Detect => {
-            let paths = steam::locate()?;
+            let components = discovery::discover();
+            let paths = components
+                .steam
+                .as_ref()
+                .context("no Steam installation found")?;
             let info = match paths.game_dir.as_deref() {
                 Some(game_dir) => probe::detect_dir(game_dir)?,
                 None => {
@@ -79,7 +83,11 @@ pub fn run(command: VersionCommand) -> anyhow::Result<()> {
             report::print_version_info(&info);
         }
         VersionCommand::Snapshot => {
-            let paths = steam::locate()?;
+            let components = discovery::discover();
+            let paths = components
+                .steam
+                .as_ref()
+                .context("no Steam installation found")?;
             let Some(game_dir) = paths.game_dir.as_deref() else {
                 anyhow::bail!("Project Zomboid install not found; nothing to snapshot");
             };
@@ -88,8 +96,7 @@ pub fn run(command: VersionCommand) -> anyhow::Result<()> {
                 anyhow::bail!("could not detect the installed game version");
             };
 
-            let root = store::locate_root(paths.game_dir.as_deref())?;
-            let store = Store::open(&root)?;
+            let store = open_store(&components)?;
             let buildid = pz::appmanifest::buildid_for_install(game_dir, pz::APP_ID);
             let game = store.snapshot_version(
                 game_dir,
@@ -101,7 +108,8 @@ pub fn run(command: VersionCommand) -> anyhow::Result<()> {
             report::print_stored_game(&game);
         }
         VersionCommand::List => {
-            let store = open_store()?;
+            let components = discovery::discover();
+            let store = open_store(&components)?;
             let games = store.list_games()?;
             report::print_games(&games);
         }
@@ -115,13 +123,15 @@ pub fn run(command: VersionCommand) -> anyhow::Result<()> {
             depot,
             force,
         } => {
-            let program = steamcmd::locate()?;
-            let paths = steam::locate().ok();
-            let root = store::locate_root(paths.as_ref().and_then(|p| p.game_dir.as_deref()))?;
-            let store = Store::open(&root)?;
+            let components = discovery::discover();
+            let program = components
+                .steamcmd
+                .clone()
+                .context("steamcmd not found; install it or set YAPZM_STEAMCMD")?;
+            let store = open_store(&components)?;
             let cmd = steamcmd::Process::new(program);
             // Fall back to the account remembered by `yapzm auth login`.
-            let login = login.or_else(|| auth::load(&root));
+            let login = login.or_else(|| auth::load(store.root()));
             let downloaded = download::download(
                 &store,
                 &cmd,
@@ -130,7 +140,7 @@ pub fn run(command: VersionCommand) -> anyhow::Result<()> {
                     login,
                     depot,
                     force,
-                    live_game_dir: paths.and_then(|p| p.game_dir),
+                    live_game_dir: components.game_dir().map(Path::to_path_buf),
                 },
             )?;
             report::print_downloaded(&downloaded);
@@ -140,13 +150,15 @@ pub fn run(command: VersionCommand) -> anyhow::Result<()> {
             login,
             depot,
         } => {
-            let program = steamcmd::locate()?;
-            let paths = steam::locate().ok();
-            let root = store::locate_root(paths.as_ref().and_then(|p| p.game_dir.as_deref()))?;
-            let store = Store::open(&root)?;
+            let components = discovery::discover();
+            let program = components
+                .steamcmd
+                .clone()
+                .context("steamcmd not found; install it or set YAPZM_STEAMCMD")?;
+            let store = open_store(&components)?;
             let cmd = steamcmd::Process::new(program);
             // Fall back to the account remembered by `yapzm auth login`.
-            let login = login.or_else(|| auth::load(&root));
+            let login = login.or_else(|| auth::load(store.root()));
             let repaired = download::repair(
                 &store,
                 &cmd,
@@ -155,7 +167,7 @@ pub fn run(command: VersionCommand) -> anyhow::Result<()> {
                     login,
                     depot,
                     force: true,
-                    live_game_dir: paths.and_then(|p| p.game_dir),
+                    live_game_dir: components.game_dir().map(Path::to_path_buf),
                 },
             )?;
             report::print_downloaded(&repaired);

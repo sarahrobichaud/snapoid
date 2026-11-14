@@ -3,6 +3,7 @@
 
 pub mod appmanifest;
 pub mod compat;
+pub mod install;
 pub mod item;
 pub mod mod_info;
 pub mod probe;

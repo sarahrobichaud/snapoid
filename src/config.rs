@@ -7,6 +7,11 @@ pub fn steamcmd_override() -> Option<PathBuf> {
     std::env::var_os("YAPZM_STEAMCMD").map(PathBuf::from)
 }
 
+/// Explicit Steam root, overriding discovery.
+pub fn steam_override() -> Option<PathBuf> {
+    std::env::var_os("YAPZM_STEAM").map(PathBuf::from)
+}
+
 /// URL of the default version registry.
 const DEFAULT_REGISTRY_URL: &str =
     "https://raw.githubusercontent.com/sarahrobichaud/yapzm/main/registry.json";

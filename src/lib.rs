@@ -6,6 +6,7 @@ pub mod auth;
 pub mod cli;
 pub mod config;
 pub mod deploy;
+pub mod discovery;
 pub mod download;
 pub mod fmt;
 pub mod fsops;

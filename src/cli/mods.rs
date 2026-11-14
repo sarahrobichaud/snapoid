@@ -1,14 +1,15 @@
 use std::collections::HashMap;
 use std::path::Path;
 
+use anyhow::Context as _;
 use clap::{ArgGroup, Subcommand};
 
 use crate::auth;
+use crate::discovery;
 use crate::remote;
 use crate::scanner::workshop;
-use crate::steam;
 use crate::steamcmd;
-use crate::store::{self, Source, Store};
+use crate::store::{Source, Store};
 use crate::workshop as workshop_dl;
 
 use crate::report;
@@ -74,8 +75,12 @@ pub fn run(command: ModsCommand) -> anyhow::Result<()> {
 
 /// List installed workshop items and the mods they contain.
 fn list() -> anyhow::Result<()> {
-    let paths = steam::locate()?;
-    let items = workshop::scan(&paths)?;
+    let components = discovery::discover();
+    let paths = components
+        .steam
+        .as_ref()
+        .context("no Steam install found")?;
+    let items = workshop::scan(paths)?;
     if items.is_empty() {
         println!("No workshop items installed for Project Zomboid.");
         return Ok(());
@@ -88,7 +93,8 @@ fn list() -> anyhow::Result<()> {
 /// List the workshop items in the local store, from the metadata
 /// captured at save time.
 fn list_store() -> anyhow::Result<()> {
-    let store = super::open_store()?;
+    let components = discovery::discover();
+    let store = super::open_store(&components)?;
     let items = store.list_mods()?;
     if items.is_empty() {
         println!("No mods stored; update some with `yapzm mods update --workshop`.");
@@ -103,7 +109,8 @@ fn list_store() -> anyhow::Result<()> {
 /// the result.
 #[cfg(debug_assertions)]
 fn repair_meta() -> anyhow::Result<()> {
-    let store = super::open_store()?;
+    let components = discovery::discover();
+    let store = super::open_store(&components)?;
     let repaired = store.repair_mod_meta()?;
     if repaired.is_empty() {
         println!("No mods stored; nothing to repair.");
@@ -118,15 +125,22 @@ fn repair_meta() -> anyhow::Result<()> {
 /// workshop dirs, otherwise steamcmd downloads the latest version of
 /// each item.
 fn update(copy: bool) -> anyhow::Result<()> {
-    let paths = steam::locate()?;
-    let items = workshop::scan(&paths)?;
+    let components = discovery::discover();
+    let paths = components
+        .steam
+        .as_ref()
+        .context("no Steam install found")?;
+    let items = workshop::scan(paths)?;
     if items.is_empty() {
         println!("No workshop items installed for Project Zomboid.");
         return Ok(());
     }
 
-    let root = store::locate_root(paths.game_dir.as_deref())?;
-    let store = Store::open(&root)?;
+    let root = components
+        .store_root
+        .as_deref()
+        .context("no mod store root found")?;
+    let store = Store::open(root)?;
 
     let mut saved = 0usize;
     let mut skipped = 0usize;
@@ -198,12 +212,15 @@ fn update(copy: bool) -> anyhow::Result<()> {
             return Ok(());
         }
 
-        let program = steamcmd::locate()?;
+        let program = components
+            .steamcmd
+            .clone()
+            .context("steamcmd not found; install it or set YAPZM_STEAMCMD")?;
         let cmd = steamcmd::Process::new(program);
         // Workshop items download anonymously by default; the account
         // remembered by `yapzm auth login` is used when present, since
         // some items need a subscription.
-        let login = auth::load(&root).unwrap_or_else(|| "anonymous".to_owned());
+        let login = auth::load(root).unwrap_or_else(|| "anonymous".to_owned());
         let content = workshop_dl::download_items(&cmd, &login, &stale)?;
         // The workshop ACF steamcmd maintains sits next to the content
         // dir's parent (.../steamapps/workshop/).

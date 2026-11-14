@@ -10,6 +10,11 @@ use std::path::{MAIN_SEPARATOR_STR, Path, PathBuf};
 /// Entries of C:\Users that are not user profiles.
 const NON_PROFILE_USERS: &[&str] = &["public", "default", "default user", "all users"];
 
+/// True when compiled for Windows.
+pub fn is_windows() -> bool {
+    cfg!(windows)
+}
+
 /// True when running under WSL (kernel release reports Microsoft/WSL).
 pub fn is_wsl() -> bool {
     std::fs::read_to_string("/proc/sys/kernel/osrelease")
@@ -18,6 +23,12 @@ pub fn is_wsl() -> bool {
             release.contains("microsoft") || release.contains("wsl")
         })
         .unwrap_or(false)
+}
+
+/// True when the Windows host filesystem is the target: native Windows,
+/// or WSL reaching the host through /mnt.
+pub fn is_windows_host() -> bool {
+    is_windows() || is_wsl()
 }
 
 /// For a path under a WSL drive automount (/mnt/<letter>/...), return the

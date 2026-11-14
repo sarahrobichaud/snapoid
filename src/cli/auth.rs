@@ -1,9 +1,11 @@
+use std::path::PathBuf;
+
+use anyhow::Context as _;
 use clap::Subcommand;
 
 use crate::auth;
-use crate::steam;
+use crate::discovery;
 use crate::steamcmd::{self, SteamCmd as _};
-use crate::store;
 
 /// Auth subcommand names, used to catch `auth login status`-style
 /// mix-ups where a subcommand is typed as an account name.
@@ -43,9 +45,9 @@ pub fn run(command: AuthCommand) -> anyhow::Result<()> {
 /// re-login afterwards proves the cache took, since that is exactly what
 /// downloads rely on.
 fn login(username: Option<String>) -> anyhow::Result<()> {
-    let program = steamcmd::locate()?;
-    let cmd = steamcmd::Process::new(program);
-    let root = store_root()?;
+    let components = discovery::discover();
+    let cmd = steamcmd::Process::new(steamcmd_exe(&components)?);
+    let root = store_root(&components)?;
 
     let explicit = username.is_some();
     let name = match username {
@@ -122,9 +124,9 @@ fn login(username: Option<String>) -> anyhow::Result<()> {
 /// prompting) and revoke right after. An outcome probe then confirms the
 /// passwordless re-login really fails.
 fn logout(clear_credentials: bool) -> anyhow::Result<()> {
-    let program = steamcmd::locate()?;
-    let cmd = steamcmd::Process::new(program);
-    let root = store_root()?;
+    let components = discovery::discover();
+    let cmd = steamcmd::Process::new(steamcmd_exe(&components)?);
+    let root = store_root(&components)?;
     let name = auth::load(&root);
 
     let mut revoke = revoke_args(clear_credentials);
@@ -190,9 +192,9 @@ fn revoke_args(clear_credentials: bool) -> Vec<String> {
 /// A pure check: it never logs in and never prompts, and it fails when
 /// the account is not logged in.
 fn status() -> anyhow::Result<()> {
-    let program = steamcmd::locate()?;
-    let cmd = steamcmd::Process::new(program);
-    let root = store_root()?;
+    let components = discovery::discover();
+    let cmd = steamcmd::Process::new(steamcmd_exe(&components)?);
+    let root = store_root(&components)?;
 
     let Some(name) = auth::load(&root) else {
         anyhow::bail!("no account remembered; run `yapzm auth login <username>`");
@@ -219,9 +221,18 @@ fn login_args(name: &str) -> Vec<String> {
     vec!["+login".to_owned(), name.to_owned(), "+quit".to_owned()]
 }
 
-/// The store root, tolerating a missing Steam install (see
-/// `open_store`).
-fn store_root() -> anyhow::Result<std::path::PathBuf> {
-    let game_dir = steam::locate().ok().and_then(|p| p.game_dir);
-    store::locate_root(game_dir.as_deref())
+/// The discovered steamcmd executable; every auth action drives it.
+fn steamcmd_exe(components: &discovery::Components) -> anyhow::Result<PathBuf> {
+    components
+        .steamcmd
+        .clone()
+        .context("steamcmd not found; install it or set YAPZM_STEAMCMD")
+}
+
+/// The store root from discovery; the remembered account lives there.
+fn store_root(components: &discovery::Components) -> anyhow::Result<PathBuf> {
+    components
+        .store_root
+        .clone()
+        .context("no mod store root found")
 }
