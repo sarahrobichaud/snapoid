@@ -24,6 +24,7 @@
 
           rust = pkgs.rust-bin.stable.latest.default.override {
             extensions = [ "rust-src" "rust-analyzer" "clippy" "rustfmt" ];
+            targets = [ "x86_64-pc-windows-msvc" ];
           };
         in
         {

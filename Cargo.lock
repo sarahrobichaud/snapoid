@@ -711,23 +711,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0c790de23124f9ab44544d7ac05d60440adc586479ce501c1d6d7da3cd8c9cf5"
 
 [[package]]
-name = "snapoid"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "clap",
- "dialoguer",
- "dirs",
- "indicatif",
- "serde",
- "serde_json",
- "sha2",
- "thiserror",
- "ureq",
- "zip",
-]
-
-[[package]]
 name = "strsim"
 version = "0.11.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1027,6 +1010,43 @@ name = "windows_x86_64_msvc"
 version = "0.52.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "589f6da84c646204747d1270a2a5661ea66ed1cced2631d546fdfb155959f9ec"
+
+[[package]]
+name = "winreg"
+version = "0.56.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7d6f32a0ff4a9f6f01231eb2059cc85479330739333e0e58cadf03b6af2cca10"
+dependencies = [
+ "cfg-if",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "yapzm"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "dirs",
+ "winreg",
+]
+
+[[package]]
+name = "yapzm-proto"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "dialoguer",
+ "dirs",
+ "indicatif",
+ "serde",
+ "serde_json",
+ "sha2",
+ "thiserror",
+ "ureq",
+ "zip",
+]
 
 [[package]]
 name = "zeroize"

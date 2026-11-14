@@ -147,7 +147,15 @@ mod tests {
         assert_eq!(parsed.mods.len(), 1);
         assert_eq!(parsed.mods[0].mod_id.as_deref(), Some("TM"));
         assert_eq!(parsed.mods[0].requires, vec!["Lib"]);
-        assert_eq!(parsed.mods[0].folders[0].manifest.as_ref().unwrap().min.as_deref(), Some("42.16"));
+        assert_eq!(
+            parsed.mods[0].folders[0]
+                .manifest
+                .as_ref()
+                .unwrap()
+                .min
+                .as_deref(),
+            Some("42.16")
+        );
         assert_eq!(parsed.mods[0].folders[0].version, 42_016);
         assert_eq!(parsed.mods[0].layout, Layout::B42);
         assert_eq!(parsed.layout, Some(Layout::B42));

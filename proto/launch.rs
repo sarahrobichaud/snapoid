@@ -114,10 +114,7 @@ pub fn plan(instance: &GameInstance, options: &LaunchOptions) -> Result<LaunchPl
     // or it reaches the game as a plain argument and the agent never
     // loads (the mod's own docs call this out for .bat launches).
     if zombie_buddy::installed_in(&instance.profile_dir) {
-        let mod_dir = instance
-            .profile_dir
-            .join("mods")
-            .join(zombie_buddy::MOD_ID);
+        let mod_dir = instance.profile_dir.join("mods").join(zombie_buddy::MOD_ID);
         let agent_dir = instance.dir.join(zombie_buddy::AGENT_DIR);
         let paths = zombie_buddy::ensure_agent(&mod_dir, &agent_dir, &instance.game_dir)?;
         // The agent's config_dir argument keeps its state (mod

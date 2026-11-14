@@ -18,12 +18,12 @@ use serde::{Deserialize, Serialize};
 use zip::write::SimpleFileOptions;
 
 use crate::fmt;
-use crate::fsops::{measure_tree, unix_now, Progress, ProgressFactory};
+use crate::fsops::{Progress, ProgressFactory, measure_tree, unix_now};
 use crate::pz::compat::{self, Compatibility};
 use crate::pz::item::{self, ModEntry};
 use crate::pz::zombie_buddy;
 use crate::store::install::{
-    activate_install, read_installed_manifest, InstallOutcome, InstalledMod, ModRecord,
+    InstallOutcome, InstalledMod, ModRecord, activate_install, read_installed_manifest,
 };
 use crate::store::{GameInstance, Store};
 use crate::{debug, info, warn};
@@ -92,9 +92,7 @@ impl Store {
             .flatten()
         {
             let name = entry.file_name().to_string_lossy().into_owned();
-            if entry.path().is_dir()
-                && !entries.iter().any(|m| m.name == name)
-            {
+            if entry.path().is_dir() && !entries.iter().any(|m| m.name == name) {
                 warn!("skipping {name}, which ships no manifest the game would read");
             }
         }
@@ -107,15 +105,13 @@ impl Store {
 
         let staging = output.with_extension("modpack-partial");
         if let Some(parent) = output.parent() {
-            fs::create_dir_all(parent)
-                .with_context(|| format!("creating {}", parent.display()))?;
+            fs::create_dir_all(parent).with_context(|| format!("creating {}", parent.display()))?;
         }
         if output.is_dir() {
             anyhow::bail!("{} is a directory", output.display());
         }
         if staging.exists() {
-            fs::remove_file(&staging)
-                .with_context(|| format!("clearing {}", staging.display()))?;
+            fs::remove_file(&staging).with_context(|| format!("clearing {}", staging.display()))?;
         }
 
         let started = Instant::now();
@@ -135,9 +131,10 @@ impl Store {
             mods: entries.clone(),
             records,
         };
-        let mut zip = zip::ZipWriter::new(fs::File::create(&staging).with_context(|| {
-            format!("creating {}", staging.display())
-        })?);
+        let mut zip = zip::ZipWriter::new(
+            fs::File::create(&staging)
+                .with_context(|| format!("creating {}", staging.display()))?,
+        );
         zip.start_file(MANIFEST, SimpleFileOptions::default())
             .with_context(|| format!("writing {MANIFEST}"))?;
         zip.write_all(&serde_json::to_vec_pretty(&manifest)?)?;
@@ -145,7 +142,13 @@ impl Store {
         let mut progress = progress(total_bytes);
         let mut packed_bytes = 0u64;
         for entry in &entries {
-            add_mod_dir(&mut zip, &mods_dir, &entry.name, &mut packed_bytes, progress.as_mut())?;
+            add_mod_dir(
+                &mut zip,
+                &mods_dir,
+                &entry.name,
+                &mut packed_bytes,
+                progress.as_mut(),
+            )?;
         }
         progress.finish();
         let file = zip
@@ -163,11 +166,9 @@ impl Store {
         // half-way.
         if output.exists() {
             warn!("replacing existing {}", output.display());
-            fs::remove_file(output)
-                .with_context(|| format!("removing {}", output.display()))?;
+            fs::remove_file(output).with_context(|| format!("removing {}", output.display()))?;
         }
-        fs::rename(&staging, output)
-            .with_context(|| format!("activating {}", output.display()))?;
+        fs::rename(&staging, output).with_context(|| format!("activating {}", output.display()))?;
         info!(
             "packed {} mod(s), {}, in {:.1}s",
             entries.len(),
@@ -242,10 +243,7 @@ impl Store {
                 Compatibility::Compatible => None,
                 Compatibility::Incompatible(reason) => Some(reason),
                 Compatibility::Unknown => {
-                    warn!(
-                        "mod {} has no compatibility signal; skipping",
-                        entry.name
-                    );
+                    warn!("mod {} has no compatibility signal; skipping", entry.name);
                     continue;
                 }
             };
@@ -348,8 +346,7 @@ fn extract_one(
     let prefix = format!("{MODS_PREFIX}{}/", mod_entry.name);
     let staging = staging_root.join(&mod_entry.name);
     if staging.exists() {
-        fs::remove_dir_all(&staging)
-            .with_context(|| format!("clearing {}", staging.display()))?;
+        fs::remove_dir_all(&staging).with_context(|| format!("clearing {}", staging.display()))?;
     }
     fs::create_dir_all(&staging)
         .with_context(|| format!("creating staging dir {}", staging.display()))?;
@@ -375,13 +372,11 @@ fn extract_one(
             continue;
         }
         if let Some(parent) = target.parent() {
-            fs::create_dir_all(parent)
-                .with_context(|| format!("creating {}", parent.display()))?;
+            fs::create_dir_all(parent).with_context(|| format!("creating {}", parent.display()))?;
         }
-        let mut out = fs::File::create(&target)
-            .with_context(|| format!("creating {}", target.display()))?;
-        let bytes = io::copy(&mut entry, &mut out)
-            .with_context(|| format!("extracting {name}"))?;
+        let mut out =
+            fs::File::create(&target).with_context(|| format!("creating {}", target.display()))?;
+        let bytes = io::copy(&mut entry, &mut out).with_context(|| format!("extracting {name}"))?;
         progress.step(bytes);
         files += 1;
     }
@@ -394,11 +389,9 @@ fn extract_one(
     let target = mods_dir.join(&mod_entry.name);
     if target.exists() {
         warn!("replacing existing mod folder {}", target.display());
-        fs::remove_dir_all(&target)
-            .with_context(|| format!("removing {}", target.display()))?;
+        fs::remove_dir_all(&target).with_context(|| format!("removing {}", target.display()))?;
     }
-    fs::rename(&staging, &target)
-        .with_context(|| format!("activating {}", target.display()))?;
+    fs::rename(&staging, &target).with_context(|| format!("activating {}", target.display()))?;
     Ok(target)
 }
 
@@ -429,10 +422,7 @@ fn add_dir_rec(
     for entry in fs::read_dir(dir).with_context(|| format!("reading {}", dir.display()))? {
         let entry = entry.with_context(|| format!("reading {}", dir.display()))?;
         let path = entry.path();
-        let child = format!(
-            "{zip_path}/{}",
-            entry.file_name().to_string_lossy()
-        );
+        let child = format!("{zip_path}/{}", entry.file_name().to_string_lossy());
         if path.is_dir() {
             add_dir_rec(zip, &path, &child, packed, progress)?;
         } else {
@@ -440,8 +430,7 @@ fn add_dir_rec(
                 fs::File::open(&path).with_context(|| format!("reading {}", path.display()))?;
             zip.start_file(&child, SimpleFileOptions::default())
                 .with_context(|| format!("writing {child}"))?;
-            let bytes = io::copy(&mut source, zip)
-                .with_context(|| format!("writing {child}"))?;
+            let bytes = io::copy(&mut source, zip).with_context(|| format!("writing {child}"))?;
             *packed += bytes;
             progress.step(bytes);
         }
@@ -528,15 +517,7 @@ mod tests {
 
         // The mod folders are in the archive, contents included.
         let mut names: Vec<String> = (0..archive.len())
-            .filter_map(|i| {
-                archive
-                    .by_index(i)
-                    .ok()?
-                    .name()
-                    .ok()?
-                    .into_owned()
-                    .into()
-            })
+            .filter_map(|i| archive.by_index(i).ok()?.name().ok()?.into_owned().into())
             .collect();
         names.sort();
         assert!(names.contains(&"mods/Plain Mod/42/media/plain.lua".to_owned()));
@@ -550,7 +531,11 @@ mod tests {
     fn packing_with_no_mods_installed_fails() -> Result<()> {
         let (store, instance, _other, _item, base) = fixture("empty")?;
         let output = base.join("empty.modpack");
-        assert!(store.instance_pack_mods(&instance, &output, noop_progress).is_err());
+        assert!(
+            store
+                .instance_pack_mods(&instance, &output, noop_progress)
+                .is_err()
+        );
         assert!(!output.exists());
         fs::remove_dir_all(&base)?;
         Ok(())
@@ -567,14 +552,18 @@ mod tests {
 
         // The mod files land in the target's profile, ZombieBuddy
         // whole (its libs/ included).
-        assert!(target
-            .profile_dir
-            .join("mods/Plain Mod/42/media/plain.lua")
-            .is_file());
-        assert!(target
-            .profile_dir
-            .join("mods/ZombieBuddy/libs/zbNative.dll")
-            .is_file());
+        assert!(
+            target
+                .profile_dir
+                .join("mods/Plain Mod/42/media/plain.lua")
+                .is_file()
+        );
+        assert!(
+            target
+                .profile_dir
+                .join("mods/ZombieBuddy/libs/zbNative.dll")
+                .is_file()
+        );
 
         // The agent install ran: loader and jar in the target's own
         // agent dir, the jar also in the game folder for the Windows
@@ -583,10 +572,7 @@ mod tests {
             outcome.agent_files,
             vec!["zbNative.dll", "ZombieBuddy.jar", "ZombieBuddy.jar.zbs"]
         );
-        assert_eq!(
-            fs::read(target.dir.join("agent/zbNative.dll"))?,
-            b"loader"
-        );
+        assert_eq!(fs::read(target.dir.join("agent/zbNative.dll"))?, b"loader");
         assert_eq!(
             fs::read(target.game_dir.join("ZombieBuddy.jar"))?,
             b"agent jar"
@@ -595,8 +581,7 @@ mod tests {
         // Activation: ZombieBuddy first, then the plain mod, in both
         // the client list and the server config.
         assert_eq!(outcome.activation.mod_ids, vec!["ZombieBuddy", "PM"]);
-        let default_txt =
-            fs::read_to_string(target.profile_dir.join("mods/default.txt"))?;
+        let default_txt = fs::read_to_string(target.profile_dir.join("mods/default.txt"))?;
         assert!(default_txt.contains("mod = ZombieBuddy,\n    mod = PM,"));
         let ini = fs::read_to_string(
             target
@@ -633,19 +618,13 @@ mod tests {
         // The mod updates in the source; re-packing and installing
         // must replace the target's copy.
         fs::write(
-            source
-                .profile_dir
-                .join("mods/Plain Mod/42/media/plain.lua"),
+            source.profile_dir.join("mods/Plain Mod/42/media/plain.lua"),
             "lua v2",
         )?;
         store.instance_pack_mods(&source, &modpack, noop_progress)?;
         store.instance_install_modpack(&target, &modpack, noop_progress)?;
         assert_eq!(
-            fs::read_to_string(
-                target
-                    .profile_dir
-                    .join("mods/Plain Mod/42/media/plain.lua")
-            )?,
+            fs::read_to_string(target.profile_dir.join("mods/Plain Mod/42/media/plain.lua"))?,
             "lua v2"
         );
 

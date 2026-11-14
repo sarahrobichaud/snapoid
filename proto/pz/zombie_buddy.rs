@@ -70,10 +70,15 @@ pub fn installed_in(profile_dir: &Path) -> bool {
 /// `LoadLibrary` adds `.dll`, Unix loaders add the `lib` prefix and
 /// `.so`).
 pub fn agent_library(agent_dir: &Path) -> Option<PathBuf> {
-    ["zbNative.dll", "zbNative.so", "libzbNative.so", "libzbNative.dylib"]
-        .iter()
-        .map(|name| agent_dir.join(name))
-        .find(|path| path.is_file())
+    [
+        "zbNative.dll",
+        "zbNative.so",
+        "libzbNative.so",
+        "libzbNative.dylib",
+    ]
+    .iter()
+    .map(|name| agent_dir.join(name))
+    .find(|path| path.is_file())
 }
 
 /// Native libraries shipped inside an installed mod folder, searched
@@ -88,12 +93,10 @@ pub fn native_libraries(mod_dir: &Path) -> Vec<PathBuf> {
 pub fn agent_jar_files(mod_dir: &Path) -> Vec<PathBuf> {
     let mut found = Vec::new();
     collect(mod_dir, &mut found, &|path: &Path| {
-        path.file_name()
-            .is_some_and(|name| {
-                let name = name.to_string_lossy();
-                name.eq_ignore_ascii_case(AGENT_JAR)
-                    || name.eq_ignore_ascii_case(AGENT_JAR_SIDECAR)
-            })
+        path.file_name().is_some_and(|name| {
+            let name = name.to_string_lossy();
+            name.eq_ignore_ascii_case(AGENT_JAR) || name.eq_ignore_ascii_case(AGENT_JAR_SIDECAR)
+        })
     });
     found
 }
@@ -124,8 +127,7 @@ fn collect(dir: &Path, found: &mut Vec<PathBuf>, keep: &dyn Fn(&Path) -> bool) {
 /// re-installing the mod refreshes every copy. Returns the copied file
 /// names.
 pub fn install_agent(mod_dir: &Path, agent_dir: &Path, game_dir: &Path) -> Result<Vec<String>> {
-    fs::create_dir_all(agent_dir)
-        .with_context(|| format!("creating {}", agent_dir.display()))?;
+    fs::create_dir_all(agent_dir).with_context(|| format!("creating {}", agent_dir.display()))?;
     let mut copied = Vec::new();
 
     let libraries = native_libraries(mod_dir);
@@ -147,10 +149,7 @@ pub fn install_agent(mod_dir: &Path, agent_dir: &Path, game_dir: &Path) -> Resul
     if copied.is_empty() {
         warn!("zombie buddy ships no agent files; the game will report it as not installed");
     } else {
-        info!(
-            "zombie buddy agent installed: {}",
-            copied.join(", ")
-        );
+        info!("zombie buddy agent installed: {}", copied.join(", "));
     }
     Ok(copied)
 }
@@ -304,10 +303,7 @@ mod tests {
         fs::remove_dir_all(&agent_dir)?;
 
         let paths = ensure_agent(&mod_dir, &agent_dir, &game_dir)?;
-        assert_eq!(
-            paths.library,
-            Some(agent_dir.join("zbNative.dll"))
-        );
+        assert_eq!(paths.library, Some(agent_dir.join("zbNative.dll")));
         assert_eq!(paths.jar, Some(agent_dir.join("ZombieBuddy.jar")));
         assert!(game_dir.join("ZombieBuddy.jar").is_file());
 

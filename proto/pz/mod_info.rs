@@ -221,9 +221,8 @@ mod tests {
 
     #[test]
     fn parses_identity_and_versions() {
-        let parsed = info(
-            "name=Test Mod\nid=TM\nauthor=Someone\nversionMin=42.16.0\nversionMax=42.99\n",
-        );
+        let parsed =
+            info("name=Test Mod\nid=TM\nauthor=Someone\nversionMin=42.16.0\nversionMax=42.99\n");
         assert_eq!(parsed.id.as_deref(), Some("TM"));
         assert_eq!(parsed.name.as_deref(), Some("Test Mod"));
         assert_eq!(parsed.author.as_deref(), Some("Someone"));
@@ -231,7 +230,10 @@ mod tests {
             parsed.version_min.as_ref().map(Version::text),
             Some("42.16.0")
         );
-        assert_eq!(parsed.version_max.as_ref().map(Version::text), Some("42.99"));
+        assert_eq!(
+            parsed.version_max.as_ref().map(Version::text),
+            Some("42.99")
+        );
     }
 
     #[test]
@@ -307,7 +309,10 @@ mod tests {
         let parsed = info(&unsafe_text);
         assert_eq!(parsed.name.as_deref(), Some("Bounded [unsafe]"));
         assert_eq!(parsed.id.as_deref(), Some("BM"));
-        assert_eq!(parsed.version_min.as_ref().map(Version::text), Some("42.22.2"));
+        assert_eq!(
+            parsed.version_min.as_ref().map(Version::text),
+            Some("42.22.2")
+        );
         assert_eq!(parsed.version_max, None);
     }
 
@@ -320,7 +325,10 @@ mod tests {
         );
         let parsed = info(&unsafe_text);
         assert_eq!(parsed.name.as_deref(), Some("Bounded Mod [unsafe]"));
-        assert_eq!(parsed.version_min.as_ref().map(Version::text), Some("42.22.2"));
+        assert_eq!(
+            parsed.version_min.as_ref().map(Version::text),
+            Some("42.22.2")
+        );
         assert_eq!(parsed.requires, vec!["Other"]);
         assert!(unsafe_text.contains("poster=p.png"));
         assert!(unsafe_text.contains("versionMin=42.22.2\n"));
@@ -331,11 +339,7 @@ mod tests {
         // The game's parse keeps the last value per key, so the
         // rewrite tags the last name= line and leaves earlier ones
         // (which it overwrites anyway) untouched.
-        let unsafe_text = unsafe_text(
-            "name=First\nname=Second\nversionMax=1.0\n",
-            "X",
-            "42.22.2",
-        );
+        let unsafe_text = unsafe_text("name=First\nname=Second\nversionMax=1.0\n", "X", "42.22.2");
         assert_eq!(info(&unsafe_text).name.as_deref(), Some("Second [unsafe]"));
         assert!(unsafe_text.contains("name=First\n"));
         assert!(!unsafe_text.contains("versionMax"));

@@ -216,9 +216,7 @@ impl Store {
     /// unreadable meta counts as not stored, so a re-save can repair it.
     pub fn stored_mod(&self, id: u64) -> Result<Option<StoredMod>> {
         let dir = self.mod_dir(id);
-        let mod_meta = meta::read::<ModMeta>(&dir.join("mod.json"))
-            .ok()
-            .flatten();
+        let mod_meta = meta::read::<ModMeta>(&dir.join("mod.json")).ok().flatten();
         Ok(mod_meta.map(|m| StoredMod {
             id: m.id,
             time_updated: m.time_updated,
@@ -305,7 +303,10 @@ mod tests {
         assert_eq!(stored.mods[0].mod_id.as_deref(), Some("TM"));
         // The manifest sits at the mod root (B41 shape), so its range
         // is the root manifest's.
-        assert_eq!(stored.mods[0].root.as_ref().unwrap().min.as_deref(), Some("42.16"));
+        assert_eq!(
+            stored.mods[0].root.as_ref().unwrap().min.as_deref(),
+            Some("42.16")
+        );
         assert_eq!(stored.mods[0].requires, vec!["Lib", "Other"]);
         assert_eq!(stored.layout, Some(Layout::B41));
         assert!(stored.dir.join("mods/Test Mod/mod.info").is_file());

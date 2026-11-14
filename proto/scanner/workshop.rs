@@ -194,10 +194,19 @@ mod tests {
         let folders = &items[1].mods[0].folders;
         assert_eq!(folders.len(), 2);
         assert_eq!(folders[0].name, "42.16");
-        assert_eq!(folders[0].manifest.as_ref().unwrap().min.as_deref(), Some("42.16.0"));
+        assert_eq!(
+            folders[0].manifest.as_ref().unwrap().min.as_deref(),
+            Some("42.16.0")
+        );
         assert_eq!(folders[1].name, "42.22");
-        assert_eq!(folders[1].manifest.as_ref().unwrap().min.as_deref(), Some("42.22.0"));
-        assert_eq!(folders[1].manifest.as_ref().unwrap().max.as_deref(), Some("42.99.0"));
+        assert_eq!(
+            folders[1].manifest.as_ref().unwrap().min.as_deref(),
+            Some("42.22.0")
+        );
+        assert_eq!(
+            folders[1].manifest.as_ref().unwrap().max.as_deref(),
+            Some("42.99.0")
+        );
 
         assert_eq!(items[1].mods[1].name, "Hybrid Mod");
         assert_eq!(items[1].mods[1].folders.len(), 1);

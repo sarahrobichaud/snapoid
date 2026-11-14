@@ -1,7 +1,6 @@
-//! Fresh rewrite of the yapzm CLI. The previous implementation is kept
-//! compilable as the `yapzm-proto` binary under `src-proto/`.
+use yapzm::cli;
 
 fn main() -> anyhow::Result<()> {
-    println!("yapzm: rewrite in progress");
+    cli::run()?;
     Ok(())
 }

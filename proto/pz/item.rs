@@ -164,9 +164,7 @@ fn inspect_mod(name: &str, dir: &Path) -> Option<ModEntry> {
     // root (B41), common/, or a version folder's own mod.info.
     let recognized = root_path.is_some()
         || common_path.is_some()
-        || versions
-            .iter()
-            .any(|(_, _, info)| info.is_some());
+        || versions.iter().any(|(_, _, info)| info.is_some());
     if !recognized {
         return None;
     }
@@ -233,7 +231,10 @@ fn inspect_mod(name: &str, dir: &Path) -> Option<ModEntry> {
         min: info.version_min.as_ref().map(|v| v.text().to_owned()),
         max: info.version_max.as_ref().map(|v| v.text().to_owned()),
     });
-    let layout = match (root_path.is_some(), common_path.is_some() || !folders.is_empty()) {
+    let layout = match (
+        root_path.is_some(),
+        common_path.is_some() || !folders.is_empty(),
+    ) {
         (true, true) => Layout::Hybrid,
         (true, false) => Layout::B41,
         (false, _) => Layout::B42,
@@ -274,18 +275,14 @@ pub fn lowest_folder(mod_entry: &ModEntry) -> Option<&FolderRange> {
 
 /// True when any manifest declares a versionMin or versionMax.
 pub fn has_declared_range(mod_entry: &ModEntry) -> bool {
-    mod_entry
-        .folders
-        .iter()
-        .any(|f| {
-            f.manifest
-                .as_ref()
-                .is_some_and(|r| r.min.is_some() || r.max.is_some())
-        })
-        || mod_entry
-            .common
+    mod_entry.folders.iter().any(|f| {
+        f.manifest
             .as_ref()
             .is_some_and(|r| r.min.is_some() || r.max.is_some())
+    }) || mod_entry
+        .common
+        .as_ref()
+        .is_some_and(|r| r.min.is_some() || r.max.is_some())
         || mod_entry
             .root
             .as_ref()
@@ -323,12 +320,24 @@ mod tests {
         write(&item, "mods/Old Mod/mod.info", "name=Old Mod\nid=OM\n");
         // B42: version folders plus common.
         let item = base.join("b42");
-        write(&item, "mods/New Mod/42.16/mod.info", "name=New Mod\nid=NM\nversionMin=42.16\n");
-        write(&item, "mods/New Mod/common/mod.info", "name=New Mod\nid=NM\n");
+        write(
+            &item,
+            "mods/New Mod/42.16/mod.info",
+            "name=New Mod\nid=NM\nversionMin=42.16\n",
+        );
+        write(
+            &item,
+            "mods/New Mod/common/mod.info",
+            "name=New Mod\nid=NM\n",
+        );
         // Hybrid: root manifest plus a version folder.
         let item = base.join("hybrid");
         write(&item, "mods/Both/mod.info", "name=Both\nid=B\n");
-        write(&item, "mods/Both/42.5/mod.info", "name=Both\nid=B\nversionMin=42.5\n");
+        write(
+            &item,
+            "mods/Both/42.5/mod.info",
+            "name=Both\nid=B\nversionMin=42.5\n",
+        );
         // Not a mod: no manifest anywhere.
         let item = base.join("empty");
         write(&item, "mods/Not A Mod/readme.txt", "hi\n");
@@ -345,7 +354,11 @@ mod tests {
     fn identity_comes_from_the_highest_version_folder() {
         let base = std::env::temp_dir().join(format!("snapoid-item-id-{}", std::process::id()));
         let item = base.join("item");
-        write(&item, "mods/M/42.16/mod.info", "name=M 16\nid=M16\nauthor=A\n");
+        write(
+            &item,
+            "mods/M/42.16/mod.info",
+            "name=M 16\nid=M16\nauthor=A\n",
+        );
         write(&item, "mods/M/42.22/mod.info", "name=M 22\nid=M22\n");
         write(&item, "mods/M/common/mod.info", "name=M common\nid=MC\n");
 
@@ -389,8 +402,14 @@ mod tests {
         );
         assert_eq!(folders[0].manifest.as_ref().unwrap().max, None);
         assert_eq!(folders[1].version, 42_022);
-        assert_eq!(folders[1].manifest.as_ref().unwrap().min.as_deref(), Some("42.10"));
-        assert_eq!(folders[1].manifest.as_ref().unwrap().max.as_deref(), Some("42.99"));
+        assert_eq!(
+            folders[1].manifest.as_ref().unwrap().min.as_deref(),
+            Some("42.10")
+        );
+        assert_eq!(
+            folders[1].manifest.as_ref().unwrap().max.as_deref(),
+            Some("42.99")
+        );
         assert_eq!(mods[0].requires, vec!["Alpha", "Beta", "Gamma"]);
         assert_eq!(mods[0].load_after, vec!["Late"]);
 
@@ -402,12 +421,19 @@ mod tests {
         let base = std::env::temp_dir().join(format!("snapoid-item-cm-{}", std::process::id()));
         let item = base.join("item");
         write(&item, "mods/M/mod.info", "name=M\nid=M\nversionMax=41.99\n");
-        write(&item, "mods/M/common/mod.info", "name=M\nid=M\nversionMin=42.0\n");
+        write(
+            &item,
+            "mods/M/common/mod.info",
+            "name=M\nid=M\nversionMin=42.0\n",
+        );
         write(&item, "mods/M/42.20/mod.info", "name=M\nid=M\n");
 
         let mods = inspect_item(&item);
         assert_eq!(mods[0].root.as_ref().unwrap().max.as_deref(), Some("41.99"));
-        assert_eq!(mods[0].common.as_ref().unwrap().min.as_deref(), Some("42.0"));
+        assert_eq!(
+            mods[0].common.as_ref().unwrap().min.as_deref(),
+            Some("42.0")
+        );
         assert_eq!(mods[0].folders.len(), 1);
         assert_eq!(mods[0].folders[0].name, "42.20");
 
@@ -450,10 +476,7 @@ mod tests {
 
         let mods = inspect_item(&item);
         assert_eq!(mods[0].folders[0].version, 42_000);
-        assert_eq!(
-            mods[0].folders[0].manifest.as_ref().unwrap().min,
-            None
-        );
+        assert_eq!(mods[0].folders[0].manifest.as_ref().unwrap().min, None);
         assert_eq!(mods[0].folders[0].manifest.as_ref().unwrap().max, None);
         assert_eq!(mods[0].layout, Layout::B42);
 
@@ -470,7 +493,10 @@ mod tests {
         let mods = inspect_item(&item);
         // The 41 folder is below the game's 42.0 floor and never
         // selected by the B42 loader.
-        assert_eq!(lowest_folder(&mods[0]).map(|f| f.name.as_str()), Some("42.16"));
+        assert_eq!(
+            lowest_folder(&mods[0]).map(|f| f.name.as_str()),
+            Some("42.16")
+        );
         assert!(!has_declared_range(&mods[0]));
 
         fs::remove_dir_all(&base).unwrap();

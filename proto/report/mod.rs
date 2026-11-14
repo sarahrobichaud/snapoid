@@ -36,10 +36,7 @@ pub fn print_scan(items: &[WorkshopItem]) {
         }
         for m in &item.mods {
             tally.add(m.layout);
-            println!(
-                "{}",
-                mod_row(m, name_width, id_width, &declared_range(m))
-            );
+            println!("{}", mod_row(m, name_width, id_width, &declared_range(m)));
         }
     }
 
@@ -64,11 +61,7 @@ pub fn print_stored_mods(items: &[StoredMod]) {
     for (author, group) in group_by_author(items) {
         println!("\n{}", author.unwrap_or("(unknown author)"));
         for item in group {
-            let mut header = format!(
-                "  {}  updated {}",
-                item.id,
-                updated_text(item.time_updated)
-            );
+            let mut header = format!("  {}  updated {}", item.id, updated_text(item.time_updated));
             if let Some(title) = &item.title {
                 header.push_str(&format!("  {title}"));
             }
@@ -92,10 +85,7 @@ pub fn print_stored_mods(items: &[StoredMod]) {
                 if is_inferred(m) {
                     inferred += 1;
                 }
-                println!(
-                    "  {}",
-                    mod_row(m, name_width, id_width, &version_range(m))
-                );
+                println!("  {}", mod_row(m, name_width, id_width, &version_range(m)));
             }
         }
     }

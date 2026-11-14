@@ -5,7 +5,7 @@ use clap::Subcommand;
 use yapzm_lib::fmt;
 use yapzm_lib::pz::compat::{self, Compatibility, Incompatibility};
 use yapzm_lib::pz::item::ModEntry;
-use yapzm_lib::store::{mod_install_status, ModStatus, SelectedMod, StoredMod};
+use yapzm_lib::store::{ModStatus, SelectedMod, StoredMod, mod_install_status};
 
 use super::open_store;
 use crate::report;
@@ -42,8 +42,7 @@ fn pack(name: Option<String>, output: Option<PathBuf>) -> anyhow::Result<()> {
     let store = open_store()?;
     let name = super::instance::resolve_name(&store, name)?;
     let instance = store.instance(&name)?;
-    let output =
-        output.unwrap_or_else(|| PathBuf::from(format!("{}.modpack", instance.name)));
+    let output = output.unwrap_or_else(|| PathBuf::from(format!("{}.modpack", instance.name)));
     let packed = store.instance_pack_mods(&instance, &output, ui::progress_factory)?;
     report::print_packed(&packed);
     Ok(())
@@ -137,15 +136,16 @@ fn install(name: Option<String>) -> anyhow::Result<()> {
         }
     }
     if unknown > 0 {
-        println!(
-            "{unknown} stored item(s) have unknown compatibility and are not shown."
-        );
+        println!("{unknown} stored item(s) have unknown compatibility and are not shown.");
     }
     if !excluded.is_empty() || unknown > 0 {
         println!();
     }
 
-    let up_to_date: Vec<&Row> = rows.iter().filter(|r| r.status == ModStatus::UpToDate).collect();
+    let up_to_date: Vec<&Row> = rows
+        .iter()
+        .filter(|r| r.status == ModStatus::UpToDate)
+        .collect();
     if !up_to_date.is_empty() {
         println!("Already installed at the stored version:");
         for row in &up_to_date {
@@ -158,7 +158,10 @@ fn install(name: Option<String>) -> anyhow::Result<()> {
 
     // Newer captures in the store: ask per mod whether to update or
     // keep the installed version.
-    for row in rows.iter().filter(|r| matches!(r.status, ModStatus::UpdateAvailable { .. })) {
+    for row in rows
+        .iter()
+        .filter(|r| matches!(r.status, ModStatus::UpdateAvailable { .. }))
+    {
         let ModStatus::UpdateAvailable { installed } = row.status else {
             unreachable!("filtered above")
         };
@@ -168,8 +171,8 @@ fn install(name: Option<String>) -> anyhow::Result<()> {
                 fmt::format_date_utc(row.item.time_updated)
             ),
             format!(
-                "Keep the installed version (installed {})"
-                ,fmt::format_date_utc(installed)
+                "Keep the installed version (installed {})",
+                fmt::format_date_utc(installed)
             ),
         ];
         let choice = ui::pick(&options, &describe_row(row.item, row.entry), 0)?;
@@ -183,10 +186,7 @@ fn install(name: Option<String>) -> anyhow::Result<()> {
     }
 
     // Never-installed mods make the checklist, one row per mod.
-    let installable: Vec<&Row> = rows
-        .iter()
-        .filter(|r| r.status == ModStatus::New)
-        .collect();
+    let installable: Vec<&Row> = rows.iter().filter(|r| r.status == ModStatus::New).collect();
     if !installable.is_empty() {
         let items: Vec<String> = installable
             .iter()

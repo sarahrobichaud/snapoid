@@ -137,7 +137,7 @@ pub fn mod_compatibility(mod_entry: &ModEntry, game_version: &str) -> Compatibil
                     range.max.as_deref(),
                     game,
                     Manifest::Folder(folder.name.clone()),
-                )
+                );
             }
             // The folder carries content only: the manifest comes from
             // common/, or the mod is not recognized at all.
@@ -294,7 +294,10 @@ pub fn available_intervals(mod_entry: &ModEntry) -> Vec<Availability> {
                 None => continue,
             },
         };
-        let start = min.map(version::game_int).unwrap_or(domain_start).max(domain_start);
+        let start = min
+            .map(version::game_int)
+            .unwrap_or(domain_start)
+            .max(domain_start);
         let end = match (max, domain_end) {
             (Some(max), Some(domain)) => Some(version::game_int(max).min(domain)),
             (Some(max), None) => Some(version::game_int(max)),
@@ -431,8 +434,14 @@ mod tests {
                 folder("42", Some("42.15"), Some("42.19")),
                 folder("42.20", Some("42.20"), None),
             ],
-            Some(ManifestRange { min: None, max: None }),
-            Some(ManifestRange { min: None, max: None }),
+            Some(ManifestRange {
+                min: None,
+                max: None,
+            }),
+            Some(ManifestRange {
+                min: None,
+                max: None,
+            }),
             Layout::Hybrid,
         );
 
@@ -582,7 +591,10 @@ mod tests {
     fn common_manifest_covers_below_the_lowest_folder() {
         let m = entry(
             vec![folder("42.16", None, None)],
-            Some(ManifestRange { min: None, max: None }),
+            Some(ManifestRange {
+                min: None,
+                max: None,
+            }),
             None,
             Layout::B42,
         );
@@ -603,15 +615,27 @@ mod tests {
 
     #[test]
     fn layout_mismatch_excludes_the_mod() {
-        let b41 = entry(Vec::new(), None, Some(ManifestRange { min: None, max: None }), Layout::B41);
+        let b41 = entry(
+            Vec::new(),
+            None,
+            Some(ManifestRange {
+                min: None,
+                max: None,
+            }),
+            Layout::B41,
+        );
         assert_eq!(
             mod_compatibility(&b41, "42.22.2"),
-            Compatibility::Incompatible(Incompatibility::LayoutOnly { layout: Layout::B41 })
+            Compatibility::Incompatible(Incompatibility::LayoutOnly {
+                layout: Layout::B41
+            })
         );
         let b42 = entry(vec![folder("42", None, None)], None, None, Layout::B42);
         assert_eq!(
             mod_compatibility(&b42, "41.5"),
-            Compatibility::Incompatible(Incompatibility::LayoutOnly { layout: Layout::B42 })
+            Compatibility::Incompatible(Incompatibility::LayoutOnly {
+                layout: Layout::B42
+            })
         );
         // A B41 mod on a B41 game loads; its range is just unknown.
         assert_eq!(mod_compatibility(&b41, "41.5"), Compatibility::Compatible);

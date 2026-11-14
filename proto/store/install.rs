@@ -26,14 +26,14 @@ use anyhow::{Context as _, Result};
 use serde::{Deserialize, Serialize};
 
 use crate::fmt;
-use crate::fsops::{copy_tree, measure_tree, Progress, ProgressFactory};
+use crate::fsops::{Progress, ProgressFactory, copy_tree, measure_tree};
 use crate::launch;
 use crate::pz::compat::{self, Compatibility};
 use crate::pz::item::ModEntry;
 use crate::pz::mod_info;
 use crate::pz::version;
 use crate::pz::zombie_buddy;
-use crate::store::{GameInstance, StoredMod, Store};
+use crate::store::{GameInstance, Store, StoredMod};
 use crate::{debug, info, warn};
 
 /// One bundled mod: installed into the profile, or skipped with the
@@ -148,11 +148,9 @@ pub fn mod_install_status(
 ) -> ModStatus {
     match manifest.record(&entry.name) {
         None => ModStatus::New,
-        Some(record) if item.time_updated > record.time_updated => {
-            ModStatus::UpdateAvailable {
-                installed: record.time_updated,
-            }
-        }
+        Some(record) if item.time_updated > record.time_updated => ModStatus::UpdateAvailable {
+            installed: record.time_updated,
+        },
         Some(_) => ModStatus::UpToDate,
     }
 }
@@ -231,7 +229,9 @@ fn copy_ops(mod_entry: &ModEntry, game: u64) -> Vec<CopyOp> {
             .as_deref()
             .is_some_and(zombie_buddy::is_mod_name)
     {
-        return vec![CopyOp::RootMinus { exclude: Vec::new() }];
+        return vec![CopyOp::RootMinus {
+            exclude: Vec::new(),
+        }];
     }
 
     let floor = 42 * 1000;
@@ -312,22 +312,18 @@ impl Store {
         let selected: Vec<SelectedMod> = items
             .iter()
             .flat_map(|item| {
-                item.mods
-                    .iter()
-                    .map(|entry| SelectedMod {
-                        item,
-                        entry,
-                        unsafe_install: false,
-                    })
+                item.mods.iter().map(|entry| SelectedMod {
+                    item,
+                    entry,
+                    unsafe_install: false,
+                })
             })
             .chain(unsafe_items.iter().flat_map(|item| {
-                item.mods
-                    .iter()
-                    .map(|entry| SelectedMod {
-                        item,
-                        entry,
-                        unsafe_install: true,
-                    })
+                item.mods.iter().map(|entry| SelectedMod {
+                    item,
+                    entry,
+                    unsafe_install: true,
+                })
             }))
             .collect();
         self.instance_install_selected(instance, &selected, progress)
@@ -606,8 +602,7 @@ fn rewrite_manifest_unsafe(
         compat::Manifest::Common => staging.join("common").join("mod.info"),
         compat::Manifest::Folder(name) => staging.join(name).join("mod.info"),
     };
-    let text =
-        fs::read_to_string(&path).with_context(|| format!("reading {}", path.display()))?;
+    let text = fs::read_to_string(&path).with_context(|| format!("reading {}", path.display()))?;
     let rewritten = mod_info::unsafe_text(&text, mod_name, game_version);
     fs::write(&path, rewritten).with_context(|| format!("writing {}", path.display()))?;
     warn!(
@@ -676,10 +671,8 @@ fn activation_order(installed: &[(String, &ModEntry)]) -> (Vec<String>, Vec<Stri
 
     // Edge a → b: a must load before b.
     let mut edges: HashMap<String, Vec<String>> = HashMap::new();
-    let mut indegree: HashMap<String, usize> = installed
-        .iter()
-        .map(|(id, _)| (id.clone(), 0))
-        .collect();
+    let mut indegree: HashMap<String, usize> =
+        installed.iter().map(|(id, _)| (id.clone(), 0)).collect();
     for (id, entry) in installed {
         for dep in entry.requires.iter().chain(entry.load_after.iter()) {
             if position.contains_key(dep) {
@@ -829,8 +822,7 @@ fn write_server_ini(path: &Path, mod_ids: &[String], instance_name: &str) -> Res
         fs::write(path, out).with_context(|| format!("writing {}", path.display()))
     } else {
         if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent)
-                .with_context(|| format!("creating {}", parent.display()))?;
+            fs::create_dir_all(parent).with_context(|| format!("creating {}", parent.display()))?;
         }
         let text = format!("PublicName={instance_name}\n{mods_line}\n");
         fs::write(path, text).with_context(|| format!("writing {}", path.display()))
@@ -841,7 +833,7 @@ fn write_server_ini(path: &Path, mod_ids: &[String], instance_name: &str) -> Res
 mod tests {
     use super::*;
     use crate::fsops::noop_progress;
-    use crate::pz::item::{inspect_item, Layout};
+    use crate::pz::item::{Layout, inspect_item};
     use crate::store::meta::Source;
 
     /// Build a store with a game version and an instance, plus a
@@ -876,7 +868,10 @@ mod tests {
             "name=Hybrid\nid=HM\nversionMin=42.20\n",
         )?;
         fs::write(mods.join("Hybrid Mod/42.20/media/new.lua"), "new")?;
-        fs::write(mods.join("Hybrid Mod/common/mod.info"), "name=Hybrid\nid=HM\n")?;
+        fs::write(
+            mods.join("Hybrid Mod/common/mod.info"),
+            "name=Hybrid\nid=HM\n",
+        )?;
         fs::write(mods.join("Hybrid Mod/common/media/shared.lua"), "shared")?;
 
         fs::create_dir_all(mods.join("Bounded Mod/42.16"))?;
@@ -893,7 +888,10 @@ mod tests {
         fs::create_dir_all(mods.join("Media Only/42/media"))?;
         fs::create_dir_all(mods.join("Media Only/common/media"))?;
         fs::write(mods.join("Media Only/42/media/m.lua"), "m")?;
-        fs::write(mods.join("Media Only/common/mod.info"), "name=Media\nid=MO\n")?;
+        fs::write(
+            mods.join("Media Only/common/mod.info"),
+            "name=Media\nid=MO\n",
+        )?;
         fs::write(mods.join("Media Only/common/media/c.lua"), "c")?;
 
         // The workshop item 3810302175 shape: a patch-suffixed folder
@@ -945,7 +943,10 @@ mod tests {
         fs::write(mods.join("ZombieBuddy/42/media/buddy.lua"), "lua")?;
         fs::write(mods.join("ZombieBuddy/libs/zbNative.dll"), "loader")?;
         fs::write(mods.join("ZombieBuddy/libs/ZombieBuddy.jar"), "agent jar")?;
-        fs::write(mods.join("ZombieBuddy/libs/ZombieBuddy.jar.zbs"), "signature")?;
+        fs::write(
+            mods.join("ZombieBuddy/libs/ZombieBuddy.jar.zbs"),
+            "signature",
+        )?;
         let zombie_buddy_item = StoredMod {
             id: 456,
             time_updated: 1,
@@ -958,18 +959,17 @@ mod tests {
         };
 
         // ZombieBuddy installs after another mod, yet must load first.
-        let outcome = store.instance_install_mods(
-            &instance,
-            &[&_item, &zombie_buddy_item],
-            noop_progress,
-        )?;
+        let outcome =
+            store.instance_install_mods(&instance, &[&_item, &zombie_buddy_item], noop_progress)?;
 
         // The whole mod folder lands in the profile (the ZombieBuddy
         // exception): libs/ included, so the profile copy is complete.
-        assert!(instance
-            .profile_dir
-            .join("mods/ZombieBuddy/libs/zbNative.dll")
-            .is_file());
+        assert!(
+            instance
+                .profile_dir
+                .join("mods/ZombieBuddy/libs/zbNative.dll")
+                .is_file()
+        );
 
         // The agent files are copied into the instance's own agent/
         // dir; the jar (with its sidecar) also lands in the game
@@ -1030,9 +1030,15 @@ mod tests {
         assert!(dir.join("42.20/mod.info").is_file());
         assert!(dir.join("42.20/media/new.lua").is_file());
         assert!(dir.join("common/media/shared.lua").is_file());
-        assert!(!dir.join("42").exists(), "unselected folder must stay behind");
+        assert!(
+            !dir.join("42").exists(),
+            "unselected folder must stay behind"
+        );
         assert!(!dir.join("42/media/old.lua").exists());
-        assert!(!dir.join("mod.info").exists(), "B41 root layout must stay behind");
+        assert!(
+            !dir.join("mod.info").exists(),
+            "B41 root layout must stay behind"
+        );
         assert!(!dir.join("media/root.lua").exists());
         assert_eq!(hybrid.mod_id.as_deref(), Some("HM"));
 
@@ -1106,9 +1112,7 @@ mod tests {
 
         // The reset sentinel is pre-created: without it the game wipes
         // default.txt on the profile's first launch.
-        let sentinel = instance
-            .profile_dir
-            .join("mods/reset-mods-42_00.txt");
+        let sentinel = instance.profile_dir.join("mods/reset-mods-42_00.txt");
         assert_eq!(
             fs::read_to_string(&sentinel)?,
             "If this file does not exist, default.txt will be reset to empty (no mods active)."
@@ -1158,14 +1162,22 @@ mod tests {
         assert!(dir.join("media/root.lua").is_file());
         assert!(!dir.join("42.20").exists(), "version folders stay behind");
         assert!(!dir.join("common").exists(), "B41 ignores common/");
-        assert!(mod_outcome(installed, "B41 Only").dir.is_some(), "B41 Only loads on B41");
+        assert!(
+            mod_outcome(installed, "B41 Only").dir.is_some(),
+            "B41 Only loads on B41"
+        );
         assert!(mod_outcome(installed, "Bounded Mod").dir.is_none());
 
         fs::remove_dir_all(&base)?;
         Ok(())
     }
 
-    fn mod_entry(id: &str, requires: &[&str], before: &[&str], after: &[&str]) -> (String, ModEntry) {
+    fn mod_entry(
+        id: &str,
+        requires: &[&str],
+        before: &[&str],
+        after: &[&str],
+    ) -> (String, ModEntry) {
         (
             id.to_owned(),
             ModEntry {
@@ -1195,10 +1207,8 @@ mod tests {
             mod_entry("C", &[], &[], &["B"]),
             mod_entry("D", &[], &["A"], &[]),
         ];
-        let refs: Vec<(String, &ModEntry)> = entries
-            .iter()
-            .map(|(id, e)| (id.clone(), e))
-            .collect();
+        let refs: Vec<(String, &ModEntry)> =
+            entries.iter().map(|(id, e)| (id.clone(), e)).collect();
         let (order, warnings) = activation_order(&refs);
         assert_eq!(order, vec!["D", "A", "B", "C"]);
         assert!(warnings.is_empty());
@@ -1213,16 +1223,12 @@ mod tests {
             mod_entry("A2", &[], &[], &["B2"]),
             mod_entry("B2", &[], &[], &["A2"]),
         ];
-        let refs: Vec<(String, &ModEntry)> = entries
-            .iter()
-            .map(|(id, e)| (id.clone(), e))
-            .collect();
+        let refs: Vec<(String, &ModEntry)> =
+            entries.iter().map(|(id, e)| (id.clone(), e)).collect();
         let (order, warnings) = activation_order(&refs);
         // The cycle falls back to install order; everything is present.
         assert_eq!(order, vec!["A", "B", "A2", "B2"]);
-        assert!(warnings
-            .iter()
-            .any(|w| w.contains("A needs Missing")));
+        assert!(warnings.iter().any(|w| w.contains("A needs Missing")));
         assert!(warnings.iter().any(|w| w.contains("cycle")));
     }
 
@@ -1242,10 +1248,7 @@ mod tests {
 
         // Created fresh: browser-visible name plus the mod line.
         write_server_ini(&ini, &["A".to_owned(), "B".to_owned()], "home")?;
-        assert_eq!(
-            fs::read_to_string(&ini)?,
-            "PublicName=home\nMods=A;B\n"
-        );
+        assert_eq!(fs::read_to_string(&ini)?, "PublicName=home\nMods=A;B\n");
 
         // Existing config: only the Mods= line is replaced.
         fs::write(
@@ -1340,8 +1343,7 @@ mod tests {
     #[test]
     fn unsafe_install_forces_a_declared_range_and_tags_the_name() -> Result<()> {
         let (store, instance, item, base) = fixture("unsafe")?;
-        let outcome =
-            store.instance_install_mods_with(&instance, &[], &[&item], noop_progress)?;
+        let outcome = store.instance_install_mods_with(&instance, &[], &[&item], noop_progress)?;
 
         // Bounded Mod declares 42.16-42.19; the unsafe install copies
         // the folder the game would select and rewrites its manifest
@@ -1360,10 +1362,7 @@ mod tests {
         assert!(mod_outcome(&outcome.mods, "Hybrid Mod").dir.is_some());
 
         // The forced mod is activated like any other.
-        assert_eq!(
-            outcome.activation.mod_ids,
-            vec!["BM", "HM", "MO", "PM"]
-        );
+        assert_eq!(outcome.activation.mod_ids, vec!["BM", "HM", "MO", "PM"]);
 
         // The manifest record remembers the unsafe install.
         let manifest = store.instance_installed_manifest(&instance);
@@ -1377,8 +1376,7 @@ mod tests {
     #[test]
     fn unsafe_install_cannot_fix_a_layout_only_mod() -> Result<()> {
         let (store, instance, item, base) = fixture("unsafe-layout")?;
-        let outcome =
-            store.instance_install_mods_with(&instance, &[], &[&item], noop_progress)?;
+        let outcome = store.instance_install_mods_with(&instance, &[], &[&item], noop_progress)?;
 
         // B41 Only ships the B41 layout; no manifest rewrite can make
         // a B42 loader read it.
@@ -1411,10 +1409,7 @@ mod tests {
         let entry = &item.mods[0];
 
         let installed = InstalledManifest::default();
-        assert_eq!(
-            mod_install_status(&item, entry, &installed),
-            ModStatus::New
-        );
+        assert_eq!(mod_install_status(&item, entry, &installed), ModStatus::New);
 
         let manifest = |records| InstalledManifest {
             format: 1,
@@ -1469,26 +1464,18 @@ mod tests {
             .collect();
         let outcome = store.instance_install_selected(&instance, &selected, noop_progress)?;
 
-        let names: Vec<&str> = outcome
-            .mods
-            .iter()
-            .map(|m| m.name.as_str())
-            .collect();
+        let names: Vec<&str> = outcome.mods.iter().map(|m| m.name.as_str()).collect();
         assert_eq!(names, vec!["Bounded Mod", "Hybrid Mod"]);
-        assert!(instance
-            .profile_dir
-            .join("mods/Hybrid Mod/42.20/media/new.lua")
-            .is_file());
-        let rewritten = fs::read_to_string(
+        assert!(
             instance
                 .profile_dir
-                .join("mods/Bounded Mod/42.16/mod.info"),
-        )?;
-        assert!(rewritten.contains("versionMin=42.22.2"));
-        assert_eq!(
-            outcome.activation.mod_ids,
-            vec!["BM", "HM"]
+                .join("mods/Hybrid Mod/42.20/media/new.lua")
+                .is_file()
         );
+        let rewritten =
+            fs::read_to_string(instance.profile_dir.join("mods/Bounded Mod/42.16/mod.info"))?;
+        assert!(rewritten.contains("versionMin=42.22.2"));
+        assert_eq!(outcome.activation.mod_ids, vec!["BM", "HM"]);
 
         fs::remove_dir_all(&base)?;
         Ok(())

@@ -164,7 +164,9 @@ fn update(copy: bool) -> anyhow::Result<()> {
         let remote = match remote::web::fetch_remote(&ids) {
             Ok(items) => items,
             Err(error) => {
-                yapzm_lib::warn!("could not query the workshop ({error:#}); downloading everything");
+                yapzm_lib::warn!(
+                    "could not query the workshop ({error:#}); downloading everything"
+                );
                 Vec::new()
             }
         };
